@@ -1,0 +1,57 @@
+# Go binaries / build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+chatlog.exe
+
+# Build output (handles `make build`)
+/bin/
+dist/
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env / secrets
+.env
+
+# syncthing files
+.stfolder
+
+# Chatlog runtime artifacts (decrypted dbs, archives)
+/chatlog-decrypted/
+*.db
+*.db-shm
+*.db-wal
+biz_archived.db
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (Playwright bridge)
+scripts/biz2md-playwright/node_modules/
+
+# Python (clipper-sim + pytest cache)
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Local backups (renamed by rm wrapper or manual move)
+.bak-*
