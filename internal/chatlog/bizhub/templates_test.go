@@ -118,9 +118,14 @@ func TestEachPageHighlightsItsOwnTab(t *testing.T) {
 
 // bulkFns 管理页里的批量操作。批量动作一次影响多个账号 / 消耗额度，
 // 按设计说明 §5「批量破坏性操作必须二次确认，文案写明影响范围与数量」。
+//
+// 归档相关的例外说明：归档任务改造成资源式之后，一次「开始归档」最多会跑
+// 上千次真实抓取并写盘，取消会让一批没跑完 —— 三个动作都算破坏性操作，
+// 都必须二次确认。批量导出原先是 batchExportMD，现已拆成这三个。
 var bulkFns = []string{
 	"batchSetVisibility", "batchSetWatch", "confirmAssignTags",
-	"batchExportMD", "batchGenerateSummaries",
+	"startExportJob", "retryExportJob", "cancelExportJob",
+	"batchGenerateSummaries",
 }
 
 // TestAdminBulkActionsConfirm 批量操作必须二次确认。

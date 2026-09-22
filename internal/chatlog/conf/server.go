@@ -5,27 +5,28 @@ const (
 )
 
 type ServerConfig struct {
-	Type                    string      `mapstructure:"type"`
-	Platform                string      `mapstructure:"platform"`
-	Version                 int         `mapstructure:"version"`
-	FullVersion             string      `mapstructure:"full_version"`
-	DataDir                 string      `mapstructure:"data_dir"`
-	DataKey                 string      `mapstructure:"data_key"`
-	ImgKey                  string      `mapstructure:"img_key"`
-	WorkDir                 string      `mapstructure:"work_dir"`
-	HTTPAddr                string      `mapstructure:"http_addr"`
-	AuthToken               string      `mapstructure:"auth_token"`
-	AutoDecrypt             bool        `mapstructure:"auto_decrypt"`
-	LLMBaseURL              string      `mapstructure:"llm_base_url"`
-	LLMAPIKey               string      `mapstructure:"llm_api_key"`
-	LLMModel                string      `mapstructure:"llm_model"`
-	LLMMaxTokens            int         `mapstructure:"llm_max_tokens"`
-	SummaryFetchContent     bool        `mapstructure:"summary_fetch_content"`
-	SummaryFetchConcurrency int         `mapstructure:"summary_fetch_concurrency"`
-	FeedSummaryCacheHours   int         `mapstructure:"feed_summary_cache_hours"`
-	MDExportDir             string      `mapstructure:"md_export_dir"`
-	MDExportScript          string      `mapstructure:"md_export_script"`
-	Webhook                 *Webhook    `mapstructure:"webhook"`
+	Type                    string   `mapstructure:"type"`
+	Platform                string   `mapstructure:"platform"`
+	Version                 int      `mapstructure:"version"`
+	FullVersion             string   `mapstructure:"full_version"`
+	DataDir                 string   `mapstructure:"data_dir"`
+	DataKey                 string   `mapstructure:"data_key"`
+	ImgKey                  string   `mapstructure:"img_key"`
+	WorkDir                 string   `mapstructure:"work_dir"`
+	HTTPAddr                string   `mapstructure:"http_addr"`
+	AuthToken               string   `mapstructure:"auth_token"`
+	AutoDecrypt             bool     `mapstructure:"auto_decrypt"`
+	LLMBaseURL              string   `mapstructure:"llm_base_url"`
+	LLMAPIKey               string   `mapstructure:"llm_api_key"`
+	LLMModel                string   `mapstructure:"llm_model"`
+	LLMMaxTokens            int      `mapstructure:"llm_max_tokens"`
+	SummaryFetchContent     bool     `mapstructure:"summary_fetch_content"`
+	SummaryFetchConcurrency int      `mapstructure:"summary_fetch_concurrency"`
+	FeedSummaryCacheHours   int      `mapstructure:"feed_summary_cache_hours"`
+	MDExportDir             string   `mapstructure:"md_export_dir"`
+	MDExportScript          string   `mapstructure:"md_export_script"`
+	MDExportConcurrency     int      `mapstructure:"md_export_concurrency"`
+	Webhook                 *Webhook `mapstructure:"webhook"`
 }
 
 var ServerDefaults = map[string]any{}
@@ -111,6 +112,14 @@ func (c *ServerConfig) GetMDExportDir() string {
 // （空值表示「归档功能未启用」，调用方据此提示配置，不做默认路径兜底）
 func (c *ServerConfig) GetMDExportScript() string {
 	return c.MDExportScript
+}
+
+// GetMDExportConcurrency 返回批量归档并发数；<=0 时调用方回退到默认 3，上限 8。
+//
+// 为什么要给上限：并发越高越容易触发微信风控，8 已经足够把单篇 20–40 秒的
+// 抓取摊到可接受的总时长，再往上收益很小而风险陡增。
+func (c *ServerConfig) GetMDExportConcurrency() int {
+	return c.MDExportConcurrency
 }
 
 func (c *ServerConfig) GetWebhook() *Webhook {

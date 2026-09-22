@@ -144,8 +144,8 @@ func (s *Service) GenerateArticleSummary(ctx context.Context, articleID int64, l
 		return fmt.Errorf("write summary file: %w", err)
 	}
 
-	// 更新 DB 记录
-	if err := s.store.UpsertExportRecord(articleID, article.URL, exportRecord.MDPath, summaryPath, "summary_generated", ""); err != nil {
+	// 更新 DB 记录（补摘要不算一次归档尝试，kind 保持为空）
+	if err := s.store.UpsertExportRecord(articleID, article.URL, exportRecord.MDPath, summaryPath, ExportStatusSummarized, "", ""); err != nil {
 		log.Warn().Err(err).Int64("articleID", articleID).Msg("bizhub: update export record with summary path failed")
 	}
 

@@ -81,8 +81,14 @@ func staticContentType(name string) string {
 //	可见性            POST /accounts/visibility  POST /admin/accounts/visibility
 //	关注              POST /accounts/watch       POST /admin/accounts/watch
 //	账号标签（批量）  POST /accounts/tags        POST /admin/accounts/tags
-//	批量导出          POST /export/batch         POST /admin/export/batch
-//	导出状态          GET  /export/status        GET  /admin/export/status
+//	归档任务（建）    POST /export/batch         POST /admin/export/jobs
+//	归档状态          GET  /export/status        GET  /admin/export/status
+//
+// 归档任务新增的子资源（无旧路径）：GET /admin/export/jobs、
+// GET /admin/export/jobs/:id、POST /admin/export/jobs/:id/retry|cancel。
+//
+// ⚠ 旧路径 POST /export/batch 的行为已变：它此前同步跑完一整批才返回，
+// 现在是建任务并立即返回 202 + 任务快照。老调用方若在等 success/failed 字段会拿到零值。
 //
 // 单篇摘要 POST /articles/:id/summary 与单篇导出 POST /articles/:id/export 未改名。
 func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) {
@@ -138,8 +144,28 @@ func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) 
 			withRecovery(func(c *gin.Context, svc *Service) {
 				handleGenerateBatchSummaries(c, svc, llm)
 			}, getSvc))
-		route(api, http.MethodPost, "/admin/export/batch", "/export/batch",
-			withRecovery(handleExportBatch, getSvc))
+		// 归档任务。
+		//
+		// 路径从动作式（POST /export/batch 一把跑完）改成资源式
+		// （POST /admin/export/jobs 建任务、GET /admin/export/jobs/:id 看进度）。
+		// 旧路径作为废弃别名保留，但行为已变：不再同步阻塞，而是返回任务快照。
+		// 这一点必须写清楚 —— 老调用方（脚本）拿到 202 + job 对象，
+		// 不能再去读 success/failed 字段。
+		//
+		// /export/batch 是更早一代的路径，route() 只接一个旧路径，所以下面手工再挂一条：
+		// 它已经存在了一段时间，直接 404 会让已经写好的脚本一起坏掉。
+		route(api, http.MethodPost, "/admin/export/jobs", "/admin/export/batch",
+			withRecovery(handleStartExportJob, getSvc))
+		api.POST("/export/batch", deprecatedAlias(http.MethodPost, api.BasePath(),
+			"/admin/export/jobs", withRecovery(handleStartExportJob, getSvc)))
+		route(api, http.MethodGet, "/admin/export/jobs", "",
+			withRecovery(handleListExportJobs, getSvc))
+		route(api, http.MethodGet, "/admin/export/jobs/:id", "",
+			withRecovery(handleGetExportJob, getSvc))
+		route(api, http.MethodPost, "/admin/export/jobs/:id/retry", "",
+			withRecovery(handleRetryExportJob, getSvc))
+		route(api, http.MethodPost, "/admin/export/jobs/:id/cancel", "",
+			withRecovery(handleCancelExportJob, getSvc))
 		route(api, http.MethodGet, "/admin/export/status", "/export/status",
 			withRecovery(handleExportStatus, getSvc))
 
@@ -942,38 +968,137 @@ func handleExportArticle(c *gin.Context, svc *Service) {
 	c.JSON(http.StatusOK, result)
 }
 
-func handleExportBatch(c *gin.Context, svc *Service) {
-	if !svc.IsExportConfigured() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "MD export not configured. Set md_export_script and md_export_dir in config."})
-		return
-	}
-
+func handleStartExportJob(c *gin.Context, svc *Service) {
 	var req ExportBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	result, err := svc.ExportBatch(c.Request.Context(), req)
+	job, err := svc.StartExportJob(req)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrExportNotConfigured):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrExportJobRunning):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrInvalidExportWindow):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	// 202 而不是 200：任务已接受但**还没跑完**。用 200 会让调用方误以为
+	// 返回体里的数字是最终结果。
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
+}
+
+func handleGetExportJob(c *gin.Context, svc *Service) {
+	id := c.Param("id")
+	// 条目明细默认只在任务结束后才带回来：轮询期间的返回体要保持小，
+	// 一次任务最多 1000 条，每秒带一份明细会把这条轮询通道撑爆。
+	withItems := c.Query("items") == "1"
+
+	job, items, err := svc.GetExportJob(id, withItems)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "归档任务不存在"})
+		return
+	}
+	if !withItems && job.Done() {
+		job, items, err = svc.GetExportJob(id, true)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if items == nil {
+		items = []ExportJobItem{}
+	}
 
-	c.JSON(http.StatusOK, result)
+	c.JSON(http.StatusOK, gin.H{
+		"job":         job,
+		"items":       items,
+		"activeJobID": svc.ActiveExportJob(),
+		"percent":     job.Percent(),
+		"processed":   job.Processed(),
+	})
+}
+
+func handleListExportJobs(c *gin.Context, svc *Service) {
+	limit := 10
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	jobs, err := svc.ListExportJobs(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if jobs == nil {
+		jobs = []*ExportJob{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"jobs":        jobs,
+		"activeJobID": svc.ActiveExportJob(),
+	})
+}
+
+func handleRetryExportJob(c *gin.Context, svc *Service) {
+	job, err := svc.RetryExportJob(c.Param("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrExportNotConfigured):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrExportJobNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrExportJobRunning):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
+}
+
+func handleCancelExportJob(c *gin.Context, svc *Service) {
+	id, ok := svc.CancelExportJob()
+	if !ok {
+		c.JSON(http.StatusConflict, gin.H{"error": "当前没有正在运行的归档任务"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"canceled": true, "jobID": id})
 }
 
 func handleExportStatus(c *gin.Context, svc *Service) {
+	daysParam, _ := strconv.Atoi(c.DefaultQuery("days", "0"))
+	days, err := ValidateExportWindow(daysParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	if !svc.IsExportConfigured() {
 		c.JSON(http.StatusOK, gin.H{
 			"configured": false,
 			"exported":   0,
 			"pending":    0,
+			"blocked":    0,
+			"days":       days,
 		})
 		return
 	}
 
-	exported, pending, err := svc.GetExportStatus()
+	stats, err := svc.GetExportStatus(days)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -981,8 +1106,10 @@ func handleExportStatus(c *gin.Context, svc *Service) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"configured": true,
-		"exported":   exported,
-		"pending":    pending,
+		"exported":   stats.Exported,
+		"pending":    stats.Pending,
+		"blocked":    stats.Blocked,
+		"days":       stats.Days,
 	})
 }
 

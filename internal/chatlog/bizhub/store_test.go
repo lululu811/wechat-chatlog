@@ -3,9 +3,6 @@ package bizhub
 import (
 	"sort"
 	"testing"
-	"time"
-
-	"github.com/sjzar/chatlog/internal/model"
 )
 
 // newTestStore 在临时目录上打开一个 store，测试结束自动清理。
@@ -292,29 +289,9 @@ func TestParseTagAssignMode(t *testing.T) {
 // 于是页面说「待导出 5 篇」、点下去只处理 3 篇 —— 差的那两篇没有任何提示，
 // 用户只会当成导出漏了。
 func TestExportStatsPendingMatchesBatchSelection(t *testing.T) {
-	s := newTestStore(t)
+	s, byURL := seedExportStore(t)
 
-	if err := s.UpsertAccounts([]Account{
-		{GHID: "gh_1", GHName: "甲号"},
-		{GHID: "gh_2", GHName: "乙号"},
-	}); err != nil {
-		t.Fatalf("UpsertAccounts: %v", err)
-	}
-	if err := s.SetAccountsHidden([]string{"gh_2"}, true); err != nil {
-		t.Fatalf("SetAccountsHidden: %v", err)
-	}
-
-	now := time.Now()
-	msgs := []*model.BizMessage{
-		{GHID: "gh_1", GHName: "甲号", Time: now, Title: "甲1", URL: "https://mp.weixin.qq.com/s/a1"},
-		{GHID: "gh_1", GHName: "甲号", Time: now, Title: "甲2", URL: "https://mp.weixin.qq.com/s/a2"},
-		{GHID: "gh_2", GHName: "乙号", Time: now, Title: "乙1", URL: "https://mp.weixin.qq.com/s/b1"},
-	}
-	if _, err := s.UpsertArticles(msgs); err != nil {
-		t.Fatalf("UpsertArticles: %v", err)
-	}
-
-	_, pending, err := s.GetExportStats()
+	stats, err := s.GetExportStats(30)
 	if err != nil {
 		t.Fatalf("GetExportStats: %v", err)
 	}
@@ -324,12 +301,18 @@ func TestExportStatsPendingMatchesBatchSelection(t *testing.T) {
 		t.Fatalf("GetUnexportedArticles: %v", err)
 	}
 
-	if pending != len(cands) {
+	if stats.Pending != len(cands) {
 		t.Errorf("待导出 %d 篇，但批量导出实际只会处理 %d 篇 —— 两条查询的过滤条件不一致",
-			pending, len(cands))
+			stats.Pending, len(cands))
 	}
 	// 乙号已隐藏，它的那篇不该出现在候选里
-	if pending != 2 {
-		t.Errorf("待导出 = %d，期望 2（甲号 2 篇；乙号已隐藏不计）", pending)
+	if stats.Pending != 2 {
+		t.Errorf("待导出 = %d，期望 2（甲号 2 篇；乙号已隐藏不计）", stats.Pending)
+	}
+	if len(byURL) != 2 {
+		t.Fatalf("种子数据异常：可见文章应 2 篇，实际 %d 篇", len(byURL))
+	}
+	if stats.Exported != 0 {
+		t.Errorf("已归档 = %d，期望 0", stats.Exported)
 	}
 }

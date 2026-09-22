@@ -16,6 +16,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 
+	"github.com/sjzar/chatlog/internal/chatlog/bizhub/mdexport"
 	"github.com/sjzar/chatlog/internal/model"
 )
 
@@ -97,6 +98,29 @@ type AccountWithTag struct {
 	Tags []Tag `json:"tags"`
 }
 
+// 归档记录状态（biz_exported_articles.status）。
+//
+// 状态机：
+//
+//	(无记录) --归档成功--> exported --生成摘要--> summary_generated
+//	(无记录) --归档失败--> failed  --再次批量归档--> exported
+//
+// 关键语义：failed 不是终态。下次批量归档会把 failed 重新纳入候选，
+// 直到重试次数用尽（attempts >= maxExportAttempts）或失败类型被判定为
+// 「需人工处理」（验证码 / 脚本缺失 / 输出目录不可写）为止。
+const (
+	ExportStatusExported   = "exported"
+	ExportStatusSummarized = "summary_generated"
+	ExportStatusFailed     = "failed"
+)
+
+// maxExportAttempts 单篇文章自动重试次数上限。
+//
+// 为什么要设上限：可重试失败（超时 / 限流）如果一直失败，说明不是偶发问题，
+// 无限重试只会每轮都在同一篇上浪费时间且加重风控。到顶后落库为需人工处理，
+// 由人在管理页看失败原因、手动重试。
+const maxExportAttempts = 3
+
 // ExportedArticle MD 导出记录（biz_exported_articles 表）
 type ExportedArticle struct {
 	ID          int64  `json:"id"`
@@ -106,8 +130,89 @@ type ExportedArticle struct {
 	SummaryPath string `json:"summaryPath"`
 	Status      string `json:"status"` // exported / summary_generated / failed
 	Error       string `json:"error"`
+	Kind        string `json:"kind"`     // 失败分类（mdexport.FailureKind），成功时为空
+	Attempts    int    `json:"attempts"` // 累计尝试次数，用于重试上限判定
 	ExportedAt  int64  `json:"exportedAt"`
 	SummaryAt   int64  `json:"summaryAt"`
+}
+
+// ExportJob 批量归档任务（biz_export_jobs 表）。
+//
+// 任务化之前，批量导出是一次同步 HTTP 请求：关掉页面 / 服务重启都会让进度
+// 彻底丢失，前端只能用假进度条（30% / 60% / 100%）糊弄。任务化之后
+// 「任务 + 逐篇结果」都落库，进度可轮询、可断点续跑。
+type ExportJob struct {
+	ID          string `json:"id"`
+	Status      string `json:"status"` // running / done / failed / canceled / interrupted
+	Days        int    `json:"days"`
+	MaxItems    int    `json:"maxItems"`
+	Concurrency int    `json:"concurrency"`
+	Degraded    bool   `json:"degraded"` // 是否因失败率过高自动降级过并发
+	Total       int    `json:"total"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedAt   int64  `json:"updatedAt"`
+	FinishedAt  int64  `json:"finishedAt"`
+	Error       string `json:"error"`
+
+	// 以下为按 item 聚合的实时计数（读取时填充，不落库）
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	Skipped   int `json:"skipped"`
+	Running   int `json:"running"`
+	Pending   int `json:"pending"`
+}
+
+// Done 已完成（含成功与中断，中断也意味着本轮不再推进）
+func (j *ExportJob) Done() bool {
+	return j.Status != ExportJobRunning
+}
+
+// Processed 已产生终态的条目数（成功 + 失败 + 跳过），用于进度百分比
+func (j *ExportJob) Processed() int {
+	return j.Succeeded + j.Failed + j.Skipped
+}
+
+// Percent 进度百分比（0–100）。total 为 0 时返回 100，避免前端算出 NaN。
+func (j *ExportJob) Percent() int {
+	if j.Total <= 0 {
+		return 100
+	}
+	p := j.Processed() * 100 / j.Total
+	if p > 100 {
+		p = 100
+	}
+	return p
+}
+
+// 任务状态
+const (
+	ExportJobRunning     = "running"
+	ExportJobDone        = "done"
+	ExportJobFailed      = "failed"
+	ExportJobCanceled    = "canceled"
+	ExportJobInterrupted = "interrupted" // 服务重启导致中断，可续跑
+)
+
+// 任务条目状态
+const (
+	ExportItemPending = "pending"
+	ExportItemRunning = "running"
+	ExportItemDone    = "done"
+	ExportItemFailed  = "failed"
+	ExportItemSkipped = "skipped"
+)
+
+// ExportJobItem 批量归档任务中的单篇条目
+type ExportJobItem struct {
+	JobID     string `json:"jobID"`
+	ArticleID int64  `json:"articleID"`
+	Title     string `json:"title"`
+	Account   string `json:"account"`
+	Status    string `json:"status"` // pending / running / done / failed / skipped
+	Kind      string `json:"kind"`   // 失败分类，仅 failed/skipped 有值
+	Error     string `json:"error"`
+	MDPath    string `json:"mdPath"`
+	UpdatedAt int64  `json:"updatedAt"`
 }
 
 // Open 打开或创建 biz_articles.db
@@ -240,12 +345,46 @@ CREATE TABLE IF NOT EXISTS biz_exported_articles (
     summary_path TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'exported',
     error        TEXT NOT NULL DEFAULT '',
+    kind         TEXT NOT NULL DEFAULT '',
+    attempts     INTEGER NOT NULL DEFAULT 0,
     exported_at  INTEGER NOT NULL DEFAULT 0,
     summary_at   INTEGER NOT NULL DEFAULT 0,
     UNIQUE(article_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_exported_articles_source_url ON biz_exported_articles(source_url);
+
+-- 批量归档任务（Sprint 1 任务化）。任务与逐篇结果落库，服务重启后可断点续跑。
+CREATE TABLE IF NOT EXISTS biz_export_jobs (
+    id          TEXT PRIMARY KEY,
+    status      TEXT NOT NULL DEFAULT 'running',
+    days        INTEGER NOT NULL DEFAULT 30,
+    max_items   INTEGER NOT NULL DEFAULT 100,
+    concurrency INTEGER NOT NULL DEFAULT 3,
+    degraded    INTEGER NOT NULL DEFAULT 0,
+    total       INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL DEFAULT 0,
+    finished_at INTEGER NOT NULL DEFAULT 0,
+    error       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_export_jobs_status ON biz_export_jobs(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS biz_export_job_items (
+    job_id     TEXT NOT NULL,
+    article_id INTEGER NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    account    TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'pending',
+    kind       TEXT NOT NULL DEFAULT '',
+    error      TEXT NOT NULL DEFAULT '',
+    md_path    TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (job_id, article_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_export_job_items_status ON biz_export_job_items(job_id, status);
 `
 	_, err := s.db.Exec(schema)
 	if err != nil {
@@ -349,6 +488,49 @@ CREATE INDEX IF NOT EXISTS idx_exported_articles_source_url ON biz_exported_arti
 			return err
 		}
 	}
+
+	// biz_exported_articles 渐进式列扩展。
+	//
+	// kind / attempts 是「失败可重试」语义的落地字段：老库里已有 status='failed'
+	// 的记录（它们此前被 e.id IS NULL 谓词永久排除在候选之外），ALTER 后
+	// attempts 默认 0、kind 默认空 —— 空 kind 落到 KindUnknown，按可重试处理，
+	// 于是这些历史失败文章会在下一次批量归档时被重新捡起来。
+	expCols := make(map[string]bool)
+	expRows, err := s.db.Query(`PRAGMA table_info(biz_exported_articles)`)
+	if err != nil {
+		return err
+	}
+	for expRows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := expRows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			expRows.Close()
+			return err
+		}
+		expCols[name] = true
+	}
+	if err := expRows.Close(); err != nil {
+		return err
+	}
+	type exportCol struct {
+		name string
+		def  string
+	}
+	expAlters := []exportCol{
+		{"kind", "TEXT NOT NULL DEFAULT ''"},
+		{"attempts", "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, c := range expAlters {
+		if expCols[c.name] {
+			continue
+		}
+		if _, err := s.db.Exec(`ALTER TABLE biz_exported_articles ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -1455,32 +1637,60 @@ func (s *Store) AutoTagAccounts() error {
 
 // --- biz_exported_articles CRUD ---
 
-// UpsertExportRecord 插入或更新导出记录（按 article_id 去重）
-func (s *Store) UpsertExportRecord(articleID int64, sourceURL, mdPath, summaryPath, status, errStr string) error {
+// UpsertExportRecord 插入或更新导出记录（按 article_id 去重）。
+//
+// status 语义见 ExportStatus* 常量。kind 为失败分类（成功时传空串）。
+// attempts 的维护规则（这是「失败可重试」的核心，改之前先想清楚）：
+//
+//	新记录 + exported           -> 0
+//	新记录 + failed             -> 1
+//	已有记录 + failed           -> 旧值 + 1（计入这次失败）
+//	已有记录 + exported         -> 归 0（成功后不再累计，避免下次偶发失败
+//	                               直接撞上重试上限而被判定为永久失败）
+//	已有记录 + summary_generated -> 不变（补摘要不算一次归档尝试）
+func (s *Store) UpsertExportRecord(articleID int64, sourceURL, mdPath, summaryPath, status, kind, errStr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now().Unix()
 	summaryAt := int64(0)
-	if status == "summary_generated" {
+	if status == ExportStatusSummarized {
 		summaryAt = now
+	}
+	// exported_at 只在真正导出成功时推进。失败不写 —— 否则管理页上
+	// 「已归档时间」会被一次失败刷成今天，掩盖真实的归档时间。
+	exportedAt := int64(0)
+	if status == ExportStatusExported || status == ExportStatusSummarized {
+		exportedAt = now
+	}
+	attemptSeed := 0
+	if status == ExportStatusFailed {
+		attemptSeed = 1
 	}
 
 	_, err := s.db.Exec(`INSERT INTO biz_exported_articles 
-		(article_id, source_url, md_path, summary_path, status, error, exported_at, summary_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		(article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(article_id) DO UPDATE SET
 			source_url=excluded.source_url,
-			md_path=excluded.md_path,
-			summary_path=excluded.summary_path,
+			-- 失败时不要把已有路径抹成空串：归档成功、补摘要失败是很常见的
+			-- 一条路径，抹掉 md_path 会让「已归档」的文章在管理页看起来像没归档。
+			md_path=CASE WHEN excluded.md_path != '' THEN excluded.md_path ELSE biz_exported_articles.md_path END,
+			summary_path=CASE WHEN excluded.summary_path != '' THEN excluded.summary_path ELSE biz_exported_articles.summary_path END,
 			status=excluded.status,
 			error=excluded.error,
-			exported_at=excluded.exported_at,
+			kind=excluded.kind,
+			attempts=CASE
+				WHEN excluded.status = 'failed' THEN biz_exported_articles.attempts + 1
+				WHEN excluded.status = 'exported' THEN 0
+				ELSE biz_exported_articles.attempts
+			END,
+			exported_at=CASE WHEN excluded.exported_at > 0 THEN excluded.exported_at ELSE biz_exported_articles.exported_at END,
 			summary_at=CASE 
 				WHEN excluded.summary_at > 0 THEN excluded.summary_at
 				ELSE biz_exported_articles.summary_at 
 			END`,
-		articleID, sourceURL, mdPath, summaryPath, status, errStr, now, summaryAt)
+		articleID, sourceURL, mdPath, summaryPath, status, errStr, kind, attemptSeed, exportedAt, summaryAt)
 	return err
 }
 
@@ -1490,9 +1700,9 @@ func (s *Store) GetExportRecord(articleID int64) (*ExportedArticle, error) {
 	defer s.mu.RUnlock()
 
 	var e ExportedArticle
-	err := s.db.QueryRow(`SELECT id, article_id, source_url, md_path, summary_path, status, error, exported_at, summary_at 
+	err := s.db.QueryRow(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at 
 		FROM biz_exported_articles WHERE article_id = ?`, articleID).
-		Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.ExportedAt, &e.SummaryAt)
+		Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -1508,9 +1718,9 @@ func (s *Store) GetExportRecordByURL(url string) (*ExportedArticle, error) {
 	defer s.mu.RUnlock()
 
 	var e ExportedArticle
-	err := s.db.QueryRow(`SELECT id, article_id, source_url, md_path, summary_path, status, error, exported_at, summary_at 
+	err := s.db.QueryRow(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at 
 		FROM biz_exported_articles WHERE source_url = ?`, url).
-		Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.ExportedAt, &e.SummaryAt)
+		Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -1534,7 +1744,7 @@ func (s *Store) GetExportRecordsByArticleIDs(ids []int64) (map[int64]*ExportedAr
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := `SELECT id, article_id, source_url, md_path, summary_path, status, error, exported_at, summary_at 
+	query := `SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at 
 		FROM biz_exported_articles WHERE article_id IN (` + strings.Join(placeholders, ",") + `)`
 
 	rows, err := s.db.Query(query, args...)
@@ -1546,7 +1756,7 @@ func (s *Store) GetExportRecordsByArticleIDs(ids []int64) (map[int64]*ExportedAr
 	result := make(map[int64]*ExportedArticle)
 	for rows.Next() {
 		var e ExportedArticle
-		if err := rows.Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.ExportedAt, &e.SummaryAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt); err != nil {
 			return nil, err
 		}
 		result[e.ArticleID] = &e
@@ -1554,7 +1764,24 @@ func (s *Store) GetExportRecordsByArticleIDs(ids []int64) (map[int64]*ExportedAr
 	return result, rows.Err()
 }
 
-// GetUnexportedArticles 获取最近 days 天内未导出的文章（用于批量导出/迁移）
+// ExportCandidateWhere 批量归档的候选条件（SQL 片段）。
+//
+// 这里是「失败会不会被永久放弃」的唯一判定点，务必与 GetExportStats 共用，
+// 否则会出现「页面说待归档 5 篇、点下去只处理 3 篇」的静默偏差。
+//
+// 条件：published_at 在窗口内、账号未被隐藏、且**没有成功记录**。
+//
+// 注意第二项不是 `e.id IS NULL`。历史实现用 `e.id IS NULL`，而导出失败也会写一条
+// status='failed' 的记录 —— 于是一篇失败过的文章从此再也不出现在候选集里，
+// 也不会出现在 pending 计数里，用户永远不知道该去重试它。这就是静默数据丢失：
+// 数字对得上，文件就是少。改成「没有成功记录」后，失败会进入下一轮自动重试；
+// 重试上限与「需人工处理」的判定放在 Go 层（见 Service.buildExportPlan），
+// 因为它依赖 mdexport 的失败分类，塞进 SQL 会把分类逻辑复制两遍。
+const ExportCandidateWhere = `a.published_at >= ? 
+		  AND (e.id IS NULL OR e.status = 'failed')
+		  AND a.gh_id NOT IN (SELECT gh_id FROM biz_accounts WHERE hidden = 1)`
+
+// GetUnexportedArticles 获取最近 days 天内仍需要归档的文章（用于批量导出/迁移）
 func (s *Store) GetUnexportedArticles(days, limit int) ([]Article, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1572,9 +1799,7 @@ func (s *Store) GetUnexportedArticles(days, limit int) ([]Article, error) {
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
-		WHERE a.published_at >= ? 
-		  AND e.id IS NULL
-		  AND a.gh_id NOT IN (SELECT gh_id FROM biz_accounts WHERE hidden = 1)
+		WHERE `+ExportCandidateWhere+`
 		ORDER BY a.published_at DESC
 		LIMIT ?
 	`, since, limit)
@@ -1596,30 +1821,354 @@ func (s *Store) GetUnexportedArticles(days, limit int) ([]Article, error) {
 	return articles, rows.Err()
 }
 
-// GetExportStats 获取导出统计
-func (s *Store) GetExportStats() (exported, pending int, err error) {
+// ExportStats 归档统计（管理页顶部的「已归档 / 待归档 / 需人工处理」）
+type ExportStats struct {
+	Exported int `json:"exported"` // 已有成功记录
+	Pending  int `json:"pending"`  // 本轮批量归档会纳入候选的篇数
+	Blocked  int `json:"blocked"`  // 候选里会被判定为「需人工处理」而跳过的篇数
+	Days     int `json:"days"`     // 统计窗口（天）
+}
+
+// GetExportStats 按给定时间窗统计归档情况。
+//
+// days <= 0 时回退 30 天。窗口必须由调用方传入实际选择的范围 —— 之前这里硬编码
+// 30 天，而页面下拉框可选 90/180，于是「近 180 天待归档」显示的数字永远是按
+// 30 天算的，选了更大的范围数字反而不变，看起来像功能没生效。
+func (s *Store) GetExportStats(days int) (*ExportStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	err = s.db.QueryRow(`SELECT COUNT(1) FROM biz_exported_articles WHERE status != 'failed'`).Scan(&exported)
-	if err != nil {
-		return
+	if days <= 0 {
+		days = 30
+	}
+	stats := &ExportStats{Days: days}
+
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM biz_exported_articles WHERE status != 'failed'`).Scan(&stats.Exported); err != nil {
+		return nil, err
 	}
 
-	// pending = 近 30 天未导出的文章数。
-	//
-	// 过滤条件必须与 GetUnexportedArticles（批量导出真正取数的地方）逐条对齐，
-	// 否则页面显示「待导出 5 篇」、点下去只处理 3 篇 —— 差的那两篇属于已隐藏账号，
-	// 用户没有别的线索能看出来，只会当成导出漏了。
-	since := time.Now().AddDate(0, 0, -30).Unix()
-	err = s.db.QueryRow(`
+	since := time.Now().AddDate(0, 0, -days).Unix()
+	if err := s.db.QueryRow(`
 		SELECT COUNT(1) FROM biz_articles a
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
+		WHERE `+ExportCandidateWhere, since).Scan(&stats.Pending); err != nil {
+		return nil, err
+	}
+
+	// blocked：候选里那些「重试已用尽」或「失败类型需人工处理」的篇数。
+	// 必须从候选集里取交集，否则用户看到 blocked=5、pending=0 会以为点一下就能跑完。
+	kinds := mdexport.PermanentKinds()
+	args := []any{since, maxExportAttempts}
+	placeholders := make([]string, len(kinds))
+	for i, k := range kinds {
+		placeholders[i] = "?"
+		args = append(args, k)
+	}
+	blockedQuery := `
+		SELECT COUNT(1) FROM biz_articles a
+		JOIN biz_exported_articles e ON a.id = e.article_id
 		WHERE a.published_at >= ?
-		  AND e.id IS NULL
-		  AND a.gh_id NOT IN (SELECT gh_id FROM biz_accounts WHERE hidden = 1)
-	`, since).Scan(&pending)
-	return
+		  AND e.status = 'failed'
+		  AND (e.attempts >= ? OR e.kind IN (` + strings.Join(placeholders, ",") + `))
+		  AND a.gh_id NOT IN (SELECT gh_id FROM biz_accounts WHERE hidden = 1)`
+	if err := s.db.QueryRow(blockedQuery, args...).Scan(&stats.Blocked); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
+// --- biz_export_jobs / biz_export_job_items CRUD ---
+
+// CreateExportJob 建任务并批量写入条目（同一事务，避免出现「有任务没条目」的半截状态）
+func (s *Store) CreateExportJob(job *ExportJob, items []ExportJobItem) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	if job.CreatedAt == 0 {
+		job.CreatedAt = now
+	}
+	job.UpdatedAt = now
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`INSERT INTO biz_export_jobs
+		(id, status, days, max_items, concurrency, degraded, total, created_at, updated_at, finished_at, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		job.ID, job.Status, job.Days, job.MaxItems, job.Concurrency, boolToInt(job.Degraded),
+		job.Total, job.CreatedAt, job.UpdatedAt, job.FinishedAt, job.Error); err != nil {
+		return err
+	}
+
+	if len(items) > 0 {
+		stmt, err := tx.Prepare(`INSERT INTO biz_export_job_items
+			(job_id, article_id, title, account, status, kind, error, md_path, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for _, it := range items {
+			if _, err := stmt.Exec(job.ID, it.ArticleID, it.Title, it.Account,
+				it.Status, it.Kind, it.Error, it.MDPath, now); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+// UpdateExportJobItem 更新单条目状态
+func (s *Store) UpdateExportJobItem(it ExportJobItem) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`UPDATE biz_export_job_items
+		SET status=?, kind=?, error=?, md_path=?, updated_at=?
+		WHERE job_id=? AND article_id=?`,
+		it.Status, it.Kind, it.Error, it.MDPath, time.Now().Unix(), it.JobID, it.ArticleID)
+	return err
+}
+
+// GetExportJob 读任务，并填充按条目聚合的实时计数
+func (s *Store) GetExportJob(id string) (*ExportJob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	job, err := scanExportJob(s.db.QueryRow(`SELECT id, status, days, max_items, concurrency, degraded,
+		total, created_at, updated_at, finished_at, error FROM biz_export_jobs WHERE id = ?`, id))
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, nil
+	}
+	if err := fillExportJobCounts(s.db, job); err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+// ListExportJobs 读最近的任务（按创建时间倒序），供管理页恢复进度显示
+func (s *Store) ListExportJobs(limit int) ([]*ExportJob, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`SELECT id, status, days, max_items, concurrency, degraded,
+		total, created_at, updated_at, finished_at, error
+		FROM biz_export_jobs ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []*ExportJob
+	for rows.Next() {
+		job, err := scanExportJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		if job == nil {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, job := range jobs {
+		if err := fillExportJobCounts(s.db, job); err != nil {
+			return nil, err
+		}
+	}
+	return jobs, nil
+}
+
+// ListExportJobItems 读任务条目。statuses 为空则返回全部。
+func (s *Store) ListExportJobItems(jobID string, statuses ...string) ([]ExportJobItem, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `SELECT job_id, article_id, title, account, status, kind, error, md_path, updated_at
+		FROM biz_export_job_items WHERE job_id = ?`
+	args := []any{jobID}
+	if len(statuses) > 0 {
+		placeholders := make([]string, len(statuses))
+		for i, st := range statuses {
+			placeholders[i] = "?"
+			args = append(args, st)
+		}
+		query += ` AND status IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	query += ` ORDER BY updated_at DESC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []ExportJobItem
+	for rows.Next() {
+		var it ExportJobItem
+		if err := rows.Scan(&it.JobID, &it.ArticleID, &it.Title, &it.Account, &it.Status,
+			&it.Kind, &it.Error, &it.MDPath, &it.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
+// SetExportJobStatus 更新任务状态；finish 为 true 时写入完成时间。
+func (s *Store) SetExportJobStatus(id, status, errMsg string, finish bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	finishedAt := int64(0)
+	if finish {
+		finishedAt = now
+	}
+	_, err := s.db.Exec(`UPDATE biz_export_jobs
+		SET status=?, error=?, updated_at=?, finished_at=CASE WHEN ? > 0 THEN ? ELSE finished_at END
+		WHERE id=?`, status, errMsg, now, finishedAt, finishedAt, id)
+	return err
+}
+
+// SetExportJobConcurrency 记录降级后的并发数（风控降级时调用）
+func (s *Store) SetExportJobConcurrency(id string, concurrency int, degraded bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`UPDATE biz_export_jobs
+		SET concurrency=?, degraded=?, updated_at=? WHERE id=?`,
+		concurrency, boolToInt(degraded), time.Now().Unix(), id)
+	return err
+}
+
+// RequeueExportJobUnfinished 把任务里所有「还没成功」的条目改回 pending，返回受影响条数。
+//
+// 语义是「重试 = 把这一任务里没成功过的全部重新跑一遍」，所以条件写成
+// status != 'done' 而不是 status = 'failed'。理由：手动重试的前提是用户
+// 已经处理了失败原因（装了抓取器、过了验证码、改好了目录权限），此时
+// 之前被判定为「需人工处理」而跳过的条目同样应该重新入队 ——
+// 否则用户点完重试看到进度条不动的第一反应是「重试按钮坏了」。
+func (s *Store) RequeueExportJobUnfinished(jobID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.db.Exec(`UPDATE biz_export_job_items
+		SET status=?, kind='', error='', updated_at=?
+		WHERE job_id=? AND status != ?`,
+		ExportItemPending, time.Now().Unix(), jobID, ExportItemDone)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// MarkInterruptedExportJobs 启动时的修复：把上次进程残留的 running 任务标为
+// interrupted，并把 running 条目退回 pending。返回被中断的任务 ID 列表。
+//
+// 为什么必须做这件事：任务化之后进程被杀（Ctrl-C、崩溃、容器重启）会留下
+// status='running' 的僵尸任务，前端一进管理页就轮到它、永远转不完；
+// 条目退回 pending 后重跑时会被重新捡起，这就是「断点续跑」的全部实现 ——
+// 不需要额外的检查点机制，因为条目状态本身就是检查点。
+func (s *Store) MarkInterruptedExportJobs() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query(`SELECT id FROM biz_export_jobs WHERE status = ? ORDER BY created_at DESC`, ExportJobRunning)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	now := time.Now().Unix()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`UPDATE biz_export_jobs
+		SET status=?, error=?, updated_at=? WHERE status = ?`,
+		ExportJobInterrupted, "服务重启导致中断，可续跑", now, ExportJobRunning); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`UPDATE biz_export_job_items
+		SET status=?, updated_at=? WHERE status = ?`,
+		ExportItemPending, now, ExportItemRunning); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// exportJobScanner 让 QueryRow 与 Rows 共用同一段扫描逻辑
+type exportJobScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanExportJob(sc exportJobScanner) (*ExportJob, error) {
+	var job ExportJob
+	var degraded int
+	err := sc.Scan(&job.ID, &job.Status, &job.Days, &job.MaxItems, &job.Concurrency,
+		&degraded, &job.Total, &job.CreatedAt, &job.UpdatedAt, &job.FinishedAt, &job.Error)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	job.Degraded = degraded != 0
+	return &job, nil
+}
+
+func fillExportJobCounts(db *sql.DB, job *ExportJob) error {
+	return db.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0)
+		FROM biz_export_job_items WHERE job_id = ?`,
+		ExportItemDone, ExportItemFailed, ExportItemSkipped, ExportItemRunning, ExportItemPending,
+		job.ID).Scan(&job.Succeeded, &job.Failed, &job.Skipped, &job.Running, &job.Pending)
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // copyFile 复制文件（用于数据库备份）
@@ -1653,7 +2202,7 @@ func (s *Store) GetExportRecordsWithoutSummary(limit int) ([]ExportedArticle, er
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`SELECT id, article_id, source_url, md_path, summary_path, status, error, exported_at, summary_at 
+	rows, err := s.db.Query(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at 
 		FROM biz_exported_articles 
 		WHERE status = 'exported' AND md_path != '' AND summary_path = ''
 		ORDER BY exported_at DESC
@@ -1666,7 +2215,7 @@ func (s *Store) GetExportRecordsWithoutSummary(limit int) ([]ExportedArticle, er
 	var records []ExportedArticle
 	for rows.Next() {
 		var e ExportedArticle
-		if err := rows.Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.ExportedAt, &e.SummaryAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt); err != nil {
 			return nil, err
 		}
 		records = append(records, e)

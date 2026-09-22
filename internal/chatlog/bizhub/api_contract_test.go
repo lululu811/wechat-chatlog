@@ -40,7 +40,11 @@ var legacyAPIPaths = []struct {
 	{http.MethodPost, "/api/v1/biz/accounts/visibility", "/api/v1/biz/admin/accounts/visibility", "/api/v1/biz/admin/accounts/visibility"},
 	{http.MethodPost, "/api/v1/biz/accounts/watch", "/api/v1/biz/admin/accounts/watch", "/api/v1/biz/admin/accounts/watch"},
 	{http.MethodPost, "/api/v1/biz/accounts/tags", "/api/v1/biz/admin/accounts/tags", "/api/v1/biz/admin/accounts/tags"},
-	{http.MethodPost, "/api/v1/biz/export/batch", "/api/v1/biz/admin/export/batch", "/api/v1/biz/admin/export/batch"},
+	// 归档任务从「动作式」改成「资源式」（POST /admin/export/jobs 建任务）。
+	// 两代旧路径都要继续可用：/export/batch 是最初的路径，
+	// /admin/export/batch 是上一轮重命名引入的，两者都还没到能摘的时候。
+	{http.MethodPost, "/api/v1/biz/admin/export/batch", "/api/v1/biz/admin/export/jobs", "/api/v1/biz/admin/export/jobs"},
+	{http.MethodPost, "/api/v1/biz/export/batch", "/api/v1/biz/admin/export/jobs", "/api/v1/biz/admin/export/jobs"},
 	{http.MethodGet, "/api/v1/biz/export/status", "/api/v1/biz/admin/export/status", "/api/v1/biz/admin/export/status"},
 }
 

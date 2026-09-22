@@ -502,11 +502,75 @@
             height: 8px;
             overflow: hidden;
         }
-        .progress-bar {
-            background: var(--accent);
+        /* 归档进度条：三段式（成功 / 失败 / 跳过）。
+         *
+         * 单色进度条看不出「有多少篇是失败的」—— 跑完 100% 但有 30 篇没落盘，
+         * 条子看着完美。把失败段直接画在条上，扫一眼就知道这轮跑得干不干净。
+         *
+         * 原来的单色 .progress-bar 随之删除：换成三段式之后它已经没有引用方，
+         * 留着就是一份「看起来能用、改起来会踩空」的死样式。 */
+        .progress-track.segmented { display: flex; }
+        .progress-seg {
             height: 100%;
             width: 0%;
             transition: width 0.3s;
+        }
+        .progress-seg.ok { background: var(--accent); }
+        .progress-seg.bad { background: #ef4444; }
+        .progress-seg.skip { background: var(--border-light); }
+
+        .job-meta {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+        }
+        .job-failures { margin-top: 14px; }
+        .job-failures h4 {
+            margin: 0 0 6px 0;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        .job-failure {
+            display: flex;
+            gap: 10px;
+            align-items: baseline;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-light);
+            font-size: 12.5px;
+        }
+        .job-failure:last-child { border-bottom: none; }
+        /* 失败分类标签。#ef4444 与页面上其它错误文案保持同色（未上提为公共令牌）。 */
+        .job-failure .kind {
+            flex-shrink: 0;
+            min-width: 76px;
+            padding: 1px 7px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            text-align: center;
+            white-space: nowrap;
+        }
+        .job-failure .kind.need-human {
+            color: #ef4444;
+            border-color: currentColor;
+        }
+        .job-failure .title {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .job-failure .reason {
+            flex-shrink: 0;
+            max-width: 42%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text-tertiary);
         }
         .task-progress { margin-top: 14px; }
         .task-result { margin-top: 14px; }
@@ -632,13 +696,15 @@
                         <h3>MD 归档</h3>
                         <p>
                             把公众号文章导出为本地 Markdown（含图片）到配置好的目录。
-                            已归档的文章会按导出记录跳过，可以安全重跑。
+                            已成功归档的会跳过；归档失败的会在下次批量时自动重试 ——
+                            只有「需人工处理」的（验证码、抓取器未安装、目录不可写）和重试次数用尽的会停下等你处理。
+                            任务在服务端后台跑，关掉这个页面不会中断它。
                         </p>
                     </div>
                     <div class="task-status" id="exportStatus">加载中…</div>
                     <div class="task-row">
                         <label for="exportDays">时间范围</label>
-                        <select id="exportDays">
+                        <select id="exportDays" onchange="loadExportStatus()">
                             <option value="7">近 7 天</option>
                             <option value="30" selected>近 30 天</option>
                             <option value="90">近 90 天</option>
@@ -646,13 +712,21 @@
                         </select>
                         <label for="exportLimit">数量上限</label>
                         <input type="number" id="exportLimit" value="100" min="1" max="1000" />
-                        <button class="btn btn-accent" onclick="batchExportMD()" id="batchExportBtn">批量导出</button>
+                        <button class="btn btn-accent" onclick="startExportJob()" id="batchExportBtn">开始归档</button>
+                        <button class="btn" onclick="retryExportJob()" id="retryExportBtn" style="display: none;">重试未成功项</button>
+                        <button class="btn" onclick="cancelExportJob()" id="cancelExportBtn" style="display: none;">取消任务</button>
                     </div>
                     <div class="task-progress" id="exportProgress" style="display: none;">
-                        <div id="exportProgressText" style="font-size: 13px; margin-bottom: 6px;">导出中…</div>
-                        <div class="progress-track"><div class="progress-bar" id="exportProgressBar"></div></div>
+                        <div id="exportProgressText" style="font-size: 13px; margin-bottom: 6px;">归档中…</div>
+                        <div class="progress-track segmented">
+                            <div class="progress-seg ok" id="exportSegOk"></div>
+                            <div class="progress-seg bad" id="exportSegBad"></div>
+                            <div class="progress-seg skip" id="exportSegSkip"></div>
+                        </div>
+                        <div class="job-meta" id="exportProgressMeta"></div>
                     </div>
                     <div class="task-result" id="exportResult" style="display: none;"></div>
+                    <div class="job-failures" id="exportFailures" style="display: none;"></div>
                 </div>
             </div>
 
@@ -1251,91 +1325,331 @@
         switchSection(sectionFromURL(), true);
         loadAccounts();
 
-        // --- MD 导出 ---
-        async function loadExportStatus() {
-            try {
-                const resp = await apiFetch('/api/v1/biz/admin/export/status');
-                const data = await resp.json();
-                const el = document.getElementById('exportStatus');
-                if (!data.configured) {
-                    el.innerHTML = '<span style="color: #ef4444;">⚠ MD 导出未配置。请在 chatlog-server.json 中设置 md_export_script 和 md_export_dir</span>';
-                    document.getElementById('batchExportBtn').disabled = true;
-                    return;
-                }
-                el.innerHTML = `已导出 <strong>${data.exported}</strong> 篇 · 待导出 <strong>${data.pending}</strong> 篇（近 30 天）`;
-            } catch (e) {
-                document.getElementById('exportStatus').textContent = '加载状态失败';
+        // --- 归档任务（MD 归档）---
+        //
+        // 任务化之前这里是「POST 一把跑完 + 假进度条（写死 30% / 60% / 100%）」：
+        // 关掉页面进度就没了，服务重启更是彻底丢失 —— 前端根本没有别的办法知道真实进展，
+        // 只能画个好看的数字糊过去。现在后端返回任务 ID 且逐篇结果落库，
+        // 这一段只做一件事：轮询服务端的真实进度。
+
+        const EXPORT_POLL_MS = 1200;
+        // 结束后展示多久内的任务：更早的就不要再占着界面了，
+        // 否则每次进管理页都会看到三天前那次归档的结果。
+        const EXPORT_SHOW_FINISHED_SECONDS = 600;
+
+        let exportPollTimer = null;
+        let exportCurrentJobID = null;
+        let exportConfigured = false;
+        let exportLastJob = null;
+
+        function exportDays() {
+            return parseInt(document.getElementById('exportDays').value, 10) || 30;
+        }
+
+        function stopExportPoll() {
+            if (exportPollTimer) {
+                clearTimeout(exportPollTimer);
+                exportPollTimer = null;
             }
         }
 
-        async function batchExportMD() {
-            const days = parseInt(document.getElementById('exportDays').value);
-            const limit = parseInt(document.getElementById('exportLimit').value);
-            if (!confirm(`将把最近 ${days} 天内最多 ${limit} 篇未归档的文章导出为 Markdown 文件。\n` +
-                '这是批量写盘操作，中途不要关闭服务。\n\n继续？')) return;
-            const btn = document.getElementById('batchExportBtn');
-            const progress = document.getElementById('exportProgress');
-            const progressText = document.getElementById('exportProgressText');
-            const progressBar = document.getElementById('exportProgressBar');
-            const result = document.getElementById('exportResult');
+        function renderExportError(msg) {
+            const el = document.getElementById('exportResult');
+            el.style.display = 'block';
+            el.innerHTML = `<span style="color: #ef4444;">${esc(msg)}</span>`;
+        }
 
-            btn.disabled = true;
-            btn.textContent = '导出中...';
-            progress.style.display = 'block';
-            result.style.display = 'none';
-            progressText.textContent = '正在导出，请稍候...';
-            progressBar.style.width = '30%';
+        // applyExportState 按任务状态决定按钮的可用性。
+        // job 为 null 表示「当前没有任务上下文」，此时只受配置是否完成影响。
+        function applyExportState(job) {
+            exportLastJob = job;
+            const running = !!(job && job.status === 'running');
+            document.getElementById('batchExportBtn').disabled = running || !exportConfigured;
+            document.getElementById('cancelExportBtn').style.display = running ? '' : 'none';
+            const retryBtn = document.getElementById('retryExportBtn');
+            const hasUnfinished = !!(job && (job.failed + job.skipped) > 0);
+            retryBtn.style.display = (!running && hasUnfinished && exportConfigured) ? '' : 'none';
+        }
+
+        function resetExportProgress() {
+            ['exportSegOk', 'exportSegBad', 'exportSegSkip'].forEach(id => {
+                document.getElementById(id).style.width = '0%';
+            });
+            document.getElementById('exportProgressMeta').textContent = '';
+        }
+
+        // renderExportJob 把任务快照画到进度区。items 可能为空 —— 轮询期间
+        // 后端只回计数、不回的明细（一次任务最多 1000 条，每秒带一份会把通道撑爆）。
+        function renderExportJob(job, items) {
+            const total = job.total || 0;
+            const pct = n => total > 0 ? (n * 100 / total) : 0;
+
+            document.getElementById('exportSegOk').style.width = pct(job.succeeded) + '%';
+            document.getElementById('exportSegBad').style.width = pct(job.failed) + '%';
+            document.getElementById('exportSegSkip').style.width = pct(job.skipped) + '%';
+
+            const LABELS = {
+                running: '归档中',
+                done: '已完成',
+                failed: '已停止',
+                canceled: '已取消',
+                interrupted: '被中断（服务重启后可续跑）',
+            };
+            const done = job.succeeded + job.failed + job.skipped;
+            document.getElementById('exportProgressText').textContent =
+                `${LABELS[job.status] || job.status} · ${done}/${total}`;
+
+            const bits = [`成功 ${job.succeeded}`];
+            if (job.failed) bits.push(`失败 ${job.failed}`);
+            if (job.skipped) bits.push(`跳过 ${job.skipped}`);
+            if (job.running) bits.push(`进行中 ${job.running}`);
+            if (job.status === 'running' && job.pending) bits.push(`待处理 ${job.pending}`);
+            bits.push(`并发 ${job.concurrency}`);
+            if (job.degraded) bits.push('已因失败率降级');
+            if (job.days) bits.push(`近 ${job.days} 天`);
+            document.getElementById('exportProgressMeta').textContent = bits.join(' · ');
+
+            renderExportFailures(items || []);
+        }
+
+        // renderExportFailures 列出未成功的条目及其分类。
+        //
+        // 没有这个清单，「失败 3 篇」就只是一个数字：用户不知道该改什么 ——
+        // 是去装抓取器、去过验证码，还是把目录权限改对。
+        const EXPORT_KIND_LABEL = {
+            captcha: '触发验证码',
+            rate_limited: '被限流',
+            timeout: '超时',
+            dependency: '抓取器未安装',
+            output_dir: '输出目录不可写',
+            no_output: '脚本无产出',
+            script_failed: '脚本执行失败',
+            invalid_url: '链接不合法',
+            unknown: '未知错误',
+        };
+        const EXPORT_NEED_HUMAN = ['captcha', 'dependency', 'output_dir', 'invalid_url'];
+
+        function renderExportFailures(items) {
+            const box = document.getElementById('exportFailures');
+            const bad = items.filter(it => it.status === 'failed' || it.status === 'skipped');
+            if (bad.length === 0) {
+                box.style.display = 'none';
+                box.innerHTML = '';
+                return;
+            }
+
+            let html = `<h4>未成功 ${bad.length} 篇</h4>`;
+            bad.forEach(it => {
+                const label = EXPORT_KIND_LABEL[it.kind] || (it.status === 'skipped' ? '已跳过' : '未知错误');
+                const cls = EXPORT_NEED_HUMAN.indexOf(it.kind) >= 0 ? 'kind need-human' : 'kind';
+                const title = it.title || '无标题';
+                html += `<div class="job-failure">`
+                    + `<span class="${cls}">${esc(label)}</span>`
+                    + `<span class="title" title="${esc(title)}">${esc(title)}</span>`
+                    + `<span class="reason" title="${esc(it.error || '')}">${esc(it.error || '')}</span>`
+                    + `</div>`;
+            });
+            box.innerHTML = html;
+            box.style.display = 'block';
+        }
+
+        function exportSummaryHTML(job) {
+            const LABELS = {
+                done: '归档完成',
+                failed: '本轮未跑完',
+                canceled: '已取消',
+                interrupted: '被中断（重启后可续跑）',
+            };
+            let html = `<strong>${LABELS[job.status] || job.status}</strong>`;
+            html += ` · 共 ${job.total} 篇 · 成功 ${job.succeeded}`;
+            if (job.failed) html += ` · 失败 ${job.failed}`;
+            if (job.skipped) html += ` · 跳过 ${job.skipped}`;
+            if (job.days) html += `（近 ${job.days} 天）`;
+            if (job.degraded) {
+                html += '<br><span style="font-size: 12px; color: var(--text-tertiary);">'
+                    + '运行中失败率偏高，已自动把并发降到 1，避免持续触发风控</span>';
+            }
+            if (job.error) {
+                html += `<br><span style="font-size: 12px; color: #ef4444;">${esc(job.error)}</span>`;
+            }
+            return html;
+        }
+
+        async function pollExportJob() {
+            const id = exportCurrentJobID;
+            if (!id) return;
+            try {
+                const resp = await apiFetch(`/api/v1/biz/admin/export/jobs/${id}`);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    stopExportPoll();
+                    renderExportError(data.error || `读取进度失败（HTTP ${resp.status}）`);
+                    return;
+                }
+
+                applyExportState(data.job);
+                renderExportJob(data.job, data.items);
+
+                if (data.job.status === 'running') {
+                    exportPollTimer = setTimeout(pollExportJob, EXPORT_POLL_MS);
+                    return;
+                }
+
+                // 已结束：后端此时会把明细一起带回来
+                stopExportPoll();
+                const result = document.getElementById('exportResult');
+                result.style.display = 'block';
+                result.innerHTML = exportSummaryHTML(data.job);
+                loadExportStatus();
+            } catch (e) {
+                stopExportPoll();
+                renderExportError('进度请求失败：' + e.message);
+            }
+        }
+
+        async function loadExportStatus() {
+            const el = document.getElementById('exportStatus');
+            try {
+                const resp = await apiFetch(`/api/v1/biz/admin/export/status?days=${exportDays()}`);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    el.textContent = data.error || '加载状态失败';
+                    return;
+                }
+                if (!data.configured) {
+                    exportConfigured = false;
+                    el.innerHTML = '<span style="color: #ef4444;">⚠ MD 归档未配置。'
+                        + '请在 chatlog-server.json 中设置 md_export_script 与 md_export_dir</span>';
+                    applyExportState(exportLastJob);
+                    return;
+                }
+                exportConfigured = true;
+                let text = `已归档 <strong>${data.exported}</strong> 篇`
+                    + ` · 近 ${data.days} 天待归档 <strong>${data.pending}</strong> 篇`;
+                if (data.blocked > 0) {
+                    text += ` · 其中 <strong style="color: #ef4444;">${data.blocked}</strong> 篇需人工处理`;
+                }
+                el.innerHTML = text;
+                applyExportState(exportLastJob);
+            } catch (e) {
+                el.textContent = '加载状态失败：' + e.message;
+            }
+        }
+
+        async function startExportJob() {
+            const days = exportDays();
+            const limit = parseInt(document.getElementById('exportLimit').value, 10) || 100;
+            if (!confirm(`将把最近 ${days} 天内最多 ${limit} 篇还没有成功归档的文章导出为 Markdown 文件。\n`
+                + '任务在服务端后台执行，关掉这个页面不会中断它。\n\n继续？')) return;
+
+            stopExportPoll();
+            document.getElementById('batchExportBtn').disabled = true;
+            document.getElementById('exportResult').style.display = 'none';
+            document.getElementById('exportFailures').style.display = 'none';
+            document.getElementById('exportProgress').style.display = 'block';
+            document.getElementById('exportProgressText').textContent = '正在创建任务…';
+            resetExportProgress();
 
             try {
-                progressBar.style.width = '60%';
-                const resp = await apiFetch('/api/v1/biz/admin/export/batch', {
+                const resp = await apiFetch('/api/v1/biz/admin/export/jobs', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ days, limit })
                 });
                 const data = await resp.json();
-                progressBar.style.width = '100%';
-
                 if (!resp.ok) {
-                    result.style.display = 'block';
-                    result.innerHTML = `<span style="color: #ef4444;">导出失败：${data.error || '未知错误'}</span>`;
-                    btn.disabled = false;
-                    btn.textContent = '批量导出';
+                    renderExportError(data.error || `创建任务失败（HTTP ${resp.status}）`);
+                    applyExportState(null);
                     return;
                 }
 
-                result.style.display = 'block';
-                let html = `<strong>导出完成</strong>（耗时 ${data.duration}）<br>`;
-                html += `总计 ${data.total} · 成功 ${data.success} · 跳过 ${data.skipped} · 失败 ${data.failed}<br>`;
-                if (data.details && data.details.length > 0) {
-                    html += '<details style="margin-top: 8px;"><summary style="cursor: pointer; font-size: 12px;">查看详情</summary><ul style="font-size: 12px; margin: 4px 0;">';
-                    data.details.forEach(d => {
-                        html += `<li>${esc(d.account || '')} / ${esc(d.title || '无标题')} (${d.duration})</li>`;
-                    });
-                    html += '</ul></details>';
-                }
-                if (data.errors && data.errors.length > 0) {
-                    html += '<details style="margin-top: 8px;"><summary style="cursor: pointer; font-size: 12px; color: #ef4444;">查看失败</summary><ul style="font-size: 12px; margin: 4px 0; color: #ef4444;">';
-                    data.errors.forEach(e => {
-                        html += `<li>${esc(e)}</li>`;
-                    });
-                    html += '</ul></details>';
-                }
-                result.innerHTML = html;
+                const job = data.job;
+                exportCurrentJobID = job.id;
+                applyExportState(job);
+                renderExportJob(job, []);
 
-                loadExportStatus();
+                if (job.status === 'running') {
+                    exportPollTimer = setTimeout(pollExportJob, EXPORT_POLL_MS);
+                } else {
+                    document.getElementById('exportProgressText').textContent =
+                        `没有需要归档的文章（近 ${job.days} 天）`;
+                    const result = document.getElementById('exportResult');
+                    result.style.display = 'block';
+                    result.innerHTML = exportSummaryHTML(job);
+                    loadExportStatus();
+                }
             } catch (e) {
-                result.style.display = 'block';
-                result.innerHTML = `<span style="color: #ef4444;">请求失败：${e.message}</span>`;
+                renderExportError('请求失败：' + e.message);
+                applyExportState(null);
             }
-
-            btn.disabled = false;
-            btn.textContent = '批量导出';
-            setTimeout(() => { progress.style.display = 'none'; progressBar.style.width = '0%'; }, 2000);
         }
 
-        // 初始化
+        async function retryExportJob() {
+            if (!exportCurrentJobID) return;
+            if (!confirm('将把这次任务里所有没成功的文章重新归档一遍。\n\n继续？')) return;
+
+            stopExportPoll();
+            document.getElementById('retryExportBtn').disabled = true;
+            try {
+                const resp = await apiFetch(`/api/v1/biz/admin/export/jobs/${exportCurrentJobID}/retry`, { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    renderExportError(data.error || `重试失败（HTTP ${resp.status}）`);
+                    return;
+                }
+                document.getElementById('exportFailures').style.display = 'none';
+                document.getElementById('exportResult').style.display = 'none';
+                await pollExportJob();
+            } catch (e) {
+                renderExportError('重试请求失败：' + e.message);
+            } finally {
+                document.getElementById('retryExportBtn').disabled = false;
+            }
+        }
+
+        async function cancelExportJob() {
+            if (!confirm('取消当前归档任务？\n已经跑完的不会回退，还没跑的会保留下来，之后可以点「重试未成功项」继续。')) return;
+            try {
+                const resp = await apiFetch(`/api/v1/biz/admin/export/jobs/${exportCurrentJobID}/cancel`, { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    renderExportError(data.error || '取消失败');
+                    return;
+                }
+                await pollExportJob();
+            } catch (e) {
+                renderExportError('取消请求失败：' + e.message);
+            }
+        }
+
+        // restoreExportJob 进页面时把上次的任务接回来。
+        //
+        // 这一步是「关掉页面不丢进度」的另一半：后端把任务落库了，前端得愿意去捡。
+        // 服务端可能正在跑（继续轮询），也可能刚跑完（把结果摆出来）。
+        // 太久以前完成的任务不再展示，免得每次进管理页都被历史结果占屏。
+        async function restoreExportJob() {
+            try {
+                const resp = await apiFetch('/api/v1/biz/admin/export/jobs?limit=1');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const job = data.jobs && data.jobs[0];
+                if (!job) return;
+
+                const nowSec = Math.floor(Date.now() / 1000);
+                const fresh = job.finishedAt > 0 && (nowSec - job.finishedAt) <= EXPORT_SHOW_FINISHED_SECONDS;
+                if (job.status !== 'running' && !fresh) return;
+
+                exportCurrentJobID = job.id;
+                document.getElementById('exportProgress').style.display = 'block';
+                await pollExportJob();
+            } catch (e) {
+                // 恢复失败不影响正常使用，静默跳过
+            }
+        }
+
+        // 初始化：先拿统计（决定按钮是否可用），再把上次任务接回来
         loadExportStatus();
+        restoreExportJob();
 
         // --- 批量生成摘要 ---
         async function batchGenerateSummaries() {

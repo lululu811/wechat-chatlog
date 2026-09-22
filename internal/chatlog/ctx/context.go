@@ -227,6 +227,11 @@ func (c *Context) GetMDExportScript() string {
 	return ""
 }
 
+// GetMDExportConcurrency TUI Context 不持久化 md_export_concurrency，返回 0（调用方回退到默认 3）
+func (c *Context) GetMDExportConcurrency() int {
+	return 0
+}
+
 func (c *Context) GetWebhook() *conf.Webhook {
 	return c.conf.Webhook
 }
