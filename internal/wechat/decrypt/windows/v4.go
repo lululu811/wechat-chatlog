@@ -2,6 +2,7 @@ package windows
 
 import (
 	"context"
+	"crypto/aes"
 	"crypto/sha512"
 	"encoding/hex"
 	"hash"
@@ -86,13 +87,18 @@ func (d *V4Decryptor) Decrypt(ctx context.Context, dbfile string, hexKey string,
 		return err
 	}
 
+	// 计算密钥
+	encKey, macKey := d.deriveKeys(key, dbInfo.Salt)
+
 	// 验证密钥
-	if !d.Validate(dbInfo.FirstPage, key) {
+	if !common.ValidateMacKey(dbInfo.FirstPage, macKey, d.hashFunc, d.hmacSize, d.reserve, d.pageSize) {
 		return errors.ErrDecryptIncorrectKey
 	}
 
-	// 计算密钥
-	encKey, macKey := d.deriveKeys(key, dbInfo.Salt)
+	block, err := aes.NewCipher(encKey)
+	if err != nil {
+		return errors.DecryptCreateCipherFailed(err)
+	}
 
 	// 打开数据库文件
 	dbFile, err := os.Open(dbfile)
@@ -150,7 +156,7 @@ func (d *V4Decryptor) Decrypt(ctx context.Context, dbfile string, hexKey string,
 		}
 
 		// 解密页面
-		decryptedData, err := common.DecryptPage(pageBuf, encKey, macKey, curPage, d.hashFunc, d.hmacSize, d.reserve, d.pageSize)
+		decryptedData, err := common.DecryptPage(pageBuf, block, macKey, curPage, d.hashFunc, d.hmacSize, d.reserve, d.pageSize)
 		if err != nil {
 			return err
 		}

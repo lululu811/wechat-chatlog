@@ -1,6 +1,7 @@
 package v4
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"database/sql"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -20,6 +22,7 @@ import (
 	"github.com/sjzar/chatlog/internal/model"
 	"github.com/sjzar/chatlog/internal/wechatdb/datasource/dbm"
 	"github.com/sjzar/chatlog/pkg/util"
+	utilzstd "github.com/sjzar/chatlog/pkg/util/zstd"
 )
 
 const (
@@ -76,7 +79,11 @@ type DataSource struct {
 	dbm  *dbm.DBManager
 
 	// 消息数据库信息
+	mu           sync.RWMutex
 	messageInfos []MessageDBInfo
+
+	// 媒体表名缓存（4.1.0 起使用 v4 表）
+	mediaTables map[string]string
 }
 
 func New(path string) (*DataSource, error) {
@@ -99,6 +106,8 @@ func New(path string) (*DataSource, error) {
 		return nil, errors.DBInitFailed(err)
 	}
 
+	ds.initMediaTables()
+
 	ds.dbm.AddCallback(Message, func(event fsnotify.Event) error {
 		if !event.Op.Has(fsnotify.Create) {
 			return nil
@@ -120,6 +129,9 @@ func (ds *DataSource) SetCallback(group string, callback func(event fsnotify.Eve
 }
 
 func (ds *DataSource) initMessageDbs() error {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
 	dbPaths, err := ds.dbm.GetDBPath(Message)
 	if err != nil {
 		if strings.Contains(err.Error(), "db file not found") {
@@ -179,6 +191,9 @@ func (ds *DataSource) initMessageDbs() error {
 
 // getDBInfosForTimeRange 获取时间范围内的数据库信息
 func (ds *DataSource) getDBInfosForTimeRange(startTime, endTime time.Time) []MessageDBInfo {
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+
 	var dbs []MessageDBInfo
 	for _, info := range ds.messageInfos {
 		if info.StartTime.Before(endTime) && info.EndTime.After(startTime) {
@@ -216,6 +231,12 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 		if err != nil {
 			return nil, errors.QueryFailed("invalid regex pattern", err)
 		}
+	}
+
+	// keyword 为纯文本时（无正则元字符），文本消息可用 SQL LIKE 粗筛（正则精筛兜底）
+	likePattern := ""
+	if keyword != "" && regexp.QuoteMeta(keyword) == keyword {
+		likePattern = "%" + escapeLike(keyword) + "%"
 	}
 
 	// 从每个相关数据库中查询消息，并在读取时进行过滤
@@ -260,13 +281,23 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 			log.Debug().Msgf("Table name: %s", tableName)
 			log.Debug().Msgf("Start time: %d, End time: %d", startTime.Unix(), endTime.Unix())
 
+			if likePattern != "" {
+				conditions = append(conditions, "(m.local_type != 1 OR IFNULL(m.WCDB_CT_message_content, 0) > 0 OR m.message_content LIKE ? ESCAPE '\\')")
+				args = append(args, likePattern)
+			}
+
 			query := fmt.Sprintf(`
 				SELECT m.sort_seq, m.server_id, m.local_type, n.user_name, m.create_time, m.message_content, m.packed_info_data, m.status
 				FROM %s m
 				LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
-				WHERE %s 
+				WHERE %s
 				ORDER BY m.sort_seq ASC
 			`, tableName, strings.Join(conditions, " AND "))
+
+			// 无 sender / keyword 过滤时，分页数量直接下推到 SQL
+			if limit > 0 && len(senders) == 0 && regex == nil {
+				query += fmt.Sprintf(" LIMIT %d", offset+limit)
+			}
 
 			// 执行查询
 			rows, err := db.QueryContext(ctx, query, args...)
@@ -297,21 +328,26 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 					return nil, errors.ScanRowFailed(err)
 				}
 
+				// 应用sender过滤：优先基于原始字段判断，避免不必要的 Wrap（含 XML 解析）开销
+				wrapCheck := false
+				if len(senders) > 0 {
+					switch msg.LocalType & 0xFFFFFFFF {
+					case model.MessageTypeShare, model.MessageTypeSystem:
+						// 拍一拍 / 系统消息的 Sender 在内容解析阶段才会确定，Wrap 后再过滤
+						wrapCheck = true
+					default:
+						if !matchAny(rawSender(&msg, talkerItem), senders) {
+							continue // 不匹配sender，跳过此消息
+						}
+					}
+				}
+
 				// 将消息转换为标准格式
 				message := msg.Wrap(talkerItem)
 
 				// 应用sender过滤
-				if len(senders) > 0 {
-					senderMatch := false
-					for _, s := range senders {
-						if message.Sender == s {
-							senderMatch = true
-							break
-						}
-					}
-					if !senderMatch {
-						continue // 不匹配sender，跳过此消息
-					}
+				if wrapCheck && !matchAny(message.Sender, senders) {
+					continue // 不匹配sender，跳过此消息
 				}
 
 				// 应用keyword过滤
@@ -605,6 +641,22 @@ func (ds *DataSource) GetSessions(ctx context.Context, key string, limit, offset
 	return sessions, nil
 }
 
+// initMediaTables 探测媒体表名（4.1.0 版本开始使用 v4 表），避免每次查询都探测
+func (ds *DataSource) initMediaTables() {
+	ds.mediaTables = make(map[string]string, 3)
+	for _type, v3table := range map[string]string{
+		"image": "image_hardlink_info_v3",
+		"video": "video_hardlink_info_v3",
+		"file":  "file_hardlink_info_v3",
+	} {
+		table := v3table
+		if !ds.IsExist(Media, table) {
+			table = strings.Replace(v3table, "_v3", "_v4", 1)
+		}
+		ds.mediaTables[_type] = table
+	}
+}
+
 func (ds *DataSource) GetMedia(ctx context.Context, _type string, key string) (*model.Media, error) {
 	if key == "" {
 		return nil, errors.ErrKeyEmpty
@@ -612,22 +664,8 @@ func (ds *DataSource) GetMedia(ctx context.Context, _type string, key string) (*
 
 	var table string
 	switch _type {
-	case "image":
-		table = "image_hardlink_info_v3"
-		// 4.1.0 版本开始使用 v4 表
-		if !ds.IsExist(Media, table) {
-			table = "image_hardlink_info_v4"
-		}
-	case "video":
-		table = "video_hardlink_info_v3"
-		if !ds.IsExist(Media, table) {
-			table = "video_hardlink_info_v4"
-		}
-	case "file":
-		table = "file_hardlink_info_v3"
-		if !ds.IsExist(Media, table) {
-			table = "file_hardlink_info_v4"
-		}
+	case "image", "video", "file":
+		table = ds.mediaTables[_type]
 	case "voice":
 		return ds.GetVoice(ctx, key)
 	default:
@@ -731,23 +769,25 @@ func (ds *DataSource) GetVoice(ctx context.Context, key string) (*model.Media, e
 		if err != nil {
 			return nil, errors.QueryFailed(query, err)
 		}
-		defer rows.Close()
 
+		var voiceData []byte
 		for rows.Next() {
-			var voiceData []byte
-			err := rows.Scan(
-				&voiceData,
-			)
-			if err != nil {
+			if err := rows.Scan(&voiceData); err != nil {
+				rows.Close()
 				return nil, errors.ScanRowFailed(err)
 			}
 			if len(voiceData) > 0 {
-				return &model.Media{
-					Type: "voice",
-					Key:  key,
-					Data: voiceData,
-				}, nil
+				break
 			}
+		}
+		rows.Close()
+
+		if len(voiceData) > 0 {
+			return &model.Media{
+				Type: "voice",
+				Key:  key,
+				Data: voiceData,
+			}, nil
 		}
 	}
 
@@ -796,13 +836,23 @@ func (ds *DataSource) GetBizMessages(ctx context.Context, ghID string, startTime
 			continue
 		}
 
-		// 查询最新 N 条
-		queryLimit := limit
-		if queryLimit <= 0 {
-			queryLimit = 1000
+		// 查询指定时间范围内的消息，limit <= 0 表示不限
+		conditions := []string{"create_time > 0"}
+		args := []interface{}{}
+		if !startTime.IsZero() {
+			conditions = append(conditions, "create_time >= ?")
+			args = append(args, startTime.Unix())
 		}
-		rows, err := db.QueryContext(ctx,
-			"SELECT create_time, local_id, sort_seq, local_type, message_content, WCDB_CT_message_content FROM \""+tableName+"\" ORDER BY sort_seq DESC LIMIT ?", queryLimit)
+		if !endTime.IsZero() {
+			conditions = append(conditions, "create_time <= ?")
+			args = append(args, endTime.Unix())
+		}
+		query := "SELECT create_time, local_id, sort_seq, local_type, message_content, WCDB_CT_message_content FROM \"" + tableName +
+			"\" WHERE " + strings.Join(conditions, " AND ") + " ORDER BY sort_seq DESC"
+		if limit > 0 {
+			query += fmt.Sprintf(" LIMIT %d", limit)
+		}
+		rows, err := db.QueryContext(ctx, query, args...)
 		if err != nil {
 			log.Error().Err(err).Str("table", tableName).Msg("biz_message query failed")
 			continue
@@ -810,24 +860,14 @@ func (ds *DataSource) GetBizMessages(ctx context.Context, ghID string, startTime
 
 		for rows.Next() {
 			var (
-				ct                int64
-				localID, sortSeq  int64
-				localType         int64
-				content           []byte
-				contentCT         sql.NullInt64
+				ct               int64
+				localID, sortSeq int64
+				localType        int64
+				content          []byte
+				contentCT        sql.NullInt64
 			)
 			if err := rows.Scan(&ct, &localID, &sortSeq, &localType, &content, &contentCT); err != nil {
 				log.Error().Err(err).Msg("biz_message scan failed")
-				continue
-			}
-			if ct == 0 {
-				continue
-			}
-			t := time.Unix(ct, 0)
-			if !startTime.IsZero() && t.Before(startTime) {
-				continue
-			}
-			if !endTime.IsZero() && t.After(endTime) {
 				continue
 			}
 			if len(content) == 0 {
@@ -838,7 +878,7 @@ func (ds *DataSource) GetBizMessages(ctx context.Context, ghID string, startTime
 			items = append(items, &model.BizMessage{
 				GHID:      ghID,
 				GHName:    ghName,
-				Time:      t,
+				Time:      time.Unix(ct, 0),
 				Title:     title,
 				Desc:      desc,
 				URL:       url,
@@ -906,15 +946,70 @@ func parseBizAppMsg(content []byte, zr *zstd.Decoder) (title, desc, url, appID s
 
 var rxAppID = regexp.MustCompile(`<appmsg[^>]+appid="([^"]+)"`)
 
+type tagRegexps struct {
+	cdata *regexp.Regexp
+	plain *regexp.Regexp
+}
+
+var bizTagRegexps = map[string]tagRegexps{
+	"title": {
+		cdata: regexp.MustCompile(`(?s)<title>\s*<!\[CDATA\[(.*?)\]\]>\s*</title>`),
+		plain: regexp.MustCompile(`(?s)<title>(.*?)</title>`),
+	},
+	"des": {
+		cdata: regexp.MustCompile(`(?s)<des>\s*<!\[CDATA\[(.*?)\]\]>\s*</des>`),
+		plain: regexp.MustCompile(`(?s)<des>(.*?)</des>`),
+	},
+	"url": {
+		cdata: regexp.MustCompile(`(?s)<url>\s*<!\[CDATA\[(.*?)\]\]>\s*</url>`),
+		plain: regexp.MustCompile(`(?s)<url>(.*?)</url>`),
+	},
+}
+
 func extractTag(s, tag string) string {
 	// 支持 <tag><![CDATA[...]]></tag> 和 <tag>...</tag>
-	cdataRe := regexp.MustCompile(`(?s)<` + tag + `>\s*<!\[CDATA\[(.*?)\]\]>\s*</` + tag + `>`)
-	if m := cdataRe.FindStringSubmatch(s); len(m) >= 2 {
+	re, ok := bizTagRegexps[tag]
+	if !ok {
+		return ""
+	}
+	if m := re.cdata.FindStringSubmatch(s); len(m) >= 2 {
 		return strings.TrimSpace(m[1])
 	}
-	plainRe := regexp.MustCompile(`(?s)<` + tag + `>(.*?)</` + tag + `>`)
-	if m := plainRe.FindStringSubmatch(s); len(m) >= 2 {
+	if m := re.plain.FindStringSubmatch(s); len(m) >= 2 {
 		return strings.TrimSpace(m[1])
 	}
 	return ""
+}
+
+// rawSender 在不解析消息内容的前提下获取发送人 ID
+func rawSender(msg *model.MessageV4, talker string) string {
+	if !strings.HasSuffix(talker, "@chatroom") {
+		return msg.UserName
+	}
+	content := msg.MessageContent
+	if bytes.HasPrefix(content, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
+		if b, err := utilzstd.Decompress(content); err == nil {
+			content = b
+		}
+	}
+	if i := bytes.Index(content, []byte(":\n")); i >= 0 {
+		return string(content[:i])
+	}
+	return msg.UserName
+}
+
+func matchAny(s string, list []string) bool {
+	for _, item := range list {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }

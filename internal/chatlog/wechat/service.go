@@ -3,8 +3,10 @@ package wechat
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,6 +71,12 @@ func (s *Service) GetDataKey(info *wechat.Account) (string, error) {
 
 func (s *Service) StartAutoDecrypt() error {
 	log.Info().Msgf("start auto decrypt, data dir: %s", s.conf.GetDataDir())
+	if s.fm != nil {
+		if err := s.fm.Stop(); err != nil {
+			log.Debug().Err(err).Msg("failed to stop previous file monitor")
+		}
+		s.fm = nil
+	}
 	dbGroup, err := filemonitor.NewFileGroup("wechat", s.conf.GetDataDir(), `.*\.db$`, []string{"fts"})
 	if err != nil {
 		return err
@@ -133,6 +141,7 @@ func (s *Service) waitAndProcess(dbFile string) {
 
 		if elapsed >= DebounceTime || totalElapsed >= MaxWaitTime {
 			s.pendingActions[dbFile] = false
+			delete(s.lastEvents, dbFile)
 			s.mutex.Unlock()
 
 			log.Debug().Msgf("Processing file: %s", dbFile)
@@ -150,13 +159,17 @@ func (s *Service) DecryptDBFile(dbFile string) error {
 		return err
 	}
 
-	output := filepath.Join(s.conf.GetWorkDir(), dbFile[len(s.conf.GetDataDir()):])
+	relPath := strings.TrimPrefix(dbFile, s.conf.GetDataDir())
+	if relPath == dbFile {
+		return fmt.Errorf("db file %s is not under data dir %s", dbFile, s.conf.GetDataDir())
+	}
+	output := filepath.Join(s.conf.GetWorkDir(), relPath)
 	if err := util.PrepareDir(filepath.Dir(output)); err != nil {
 		return err
 	}
 
 	outputTemp := output + ".tmp"
-	outputFile, err := os.Create(outputTemp)
+	outputFile, err := os.OpenFile(outputTemp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %v", err)
 	}
@@ -169,8 +182,13 @@ func (s *Service) DecryptDBFile(dbFile string) error {
 
 	if err := decryptor.Decrypt(context.Background(), dbFile, s.conf.GetDataKey(), outputFile); err != nil {
 		if err == errors.ErrAlreadyDecrypted {
-			if data, err := os.ReadFile(dbFile); err == nil {
-				outputFile.Write(data)
+			src, err := os.Open(dbFile)
+			if err != nil {
+				return fmt.Errorf("failed to open db file: %v", err)
+			}
+			defer src.Close()
+			if _, err := io.Copy(outputFile, src); err != nil {
+				return fmt.Errorf("failed to copy db file: %v", err)
 			}
 			return nil
 		}

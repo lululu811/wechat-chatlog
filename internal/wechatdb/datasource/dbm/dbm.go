@@ -118,6 +118,11 @@ func (d *DBManager) OpenDB(path string) (*sql.DB, error) {
 	if ok {
 		return db, nil
 	}
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	if db, ok = d.dbs[path]; ok {
+		return db, nil
+	}
 	var err error
 	tempPath := path
 	if runtime.GOOS == "windows" {
@@ -132,9 +137,7 @@ func (d *DBManager) OpenDB(path string) (*sql.DB, error) {
 		log.Err(err).Msgf("连接数据库 %s 失败", path)
 		return nil, err
 	}
-	d.mutex.Lock()
 	d.dbs[path] = db
-	d.mutex.Unlock()
 	return db, nil
 }
 
@@ -166,8 +169,11 @@ func (d *DBManager) Stop() error {
 }
 
 func (d *DBManager) Close() error {
+	d.mutex.Lock()
 	for _, db := range d.dbs {
 		db.Close()
 	}
+	d.dbs = make(map[string]*sql.DB)
+	d.mutex.Unlock()
 	return d.fm.Stop()
 }

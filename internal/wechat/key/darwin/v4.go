@@ -180,7 +180,7 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 			if dataKey == "" {
 				if key, ok := e.SearchKey(ctx, memory); ok {
 					dataKey = key
-					log.Debug().Msg("Data key found: " + key)
+					log.Debug().Msg("Data key found: " + key[:8] + "...")
 					// Report immediately when found
 					select {
 					case resultChannel <- [2]string{dataKey, imgKey}:
@@ -194,7 +194,7 @@ func (e *V4Extractor) worker(ctx context.Context, memoryChannel <-chan []byte, r
 			if imgKey == "" {
 				if key, ok := e.SearchImgKey(ctx, memory); ok {
 					imgKey = key
-					log.Debug().Msg("Image key found: " + key)
+					log.Debug().Msg("Image key found: " + key[:8] + "...")
 					// Report immediately when found
 					select {
 					case resultChannel <- [2]string{dataKey, imgKey}:
@@ -268,7 +268,7 @@ func (e *V4Extractor) SearchKey(ctx context.Context, memory []byte) (string, boo
 					log.Debug().
 						Str("pattern", hex.EncodeToString(keyPattern.Pattern)).
 						Int("offset", offset).
-						Str("key", keyHex).
+						Str("key", keyHex[:8]+"...").
 						Msg("Data key found")
 					return keyHex, true
 				}
@@ -339,7 +339,7 @@ func (e *V4Extractor) SearchImgKey(ctx context.Context, memory []byte) (string, 
 					log.Debug().
 						Str("pattern", hex.EncodeToString(keyPattern.Pattern)).
 						Int("offset", offset).
-						Str("key", keyHex).
+						Str("key", keyHex[:8]+"...").
 						Msg("Image key found")
 					return keyHex, true
 				}

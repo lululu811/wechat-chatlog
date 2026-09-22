@@ -256,6 +256,12 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 		}
 	}
 
+	// keyword 为纯文本时（无正则元字符），文本消息可用 SQL LIKE 粗筛（正则精筛兜底）
+	likePattern := ""
+	if keyword != "" && regexp.QuoteMeta(keyword) == keyword {
+		likePattern = "%" + escapeLike(keyword) + "%"
+	}
+
 	// 从每个相关数据库中查询消息
 	filteredMessages := []*model.Message{}
 
@@ -287,13 +293,23 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 				args = append(args, talkerItem)
 			}
 
+			if likePattern != "" {
+				conditions = append(conditions, "(Type != 1 OR StrContent LIKE ? ESCAPE '\\')")
+				args = append(args, likePattern)
+			}
+
 			query := fmt.Sprintf(`
-				SELECT MsgSvrID, Sequence, CreateTime, StrTalker, IsSender, 
+				SELECT MsgSvrID, Sequence, CreateTime, StrTalker, IsSender,
 					Type, SubType, StrContent, CompressContent, BytesExtra
-				FROM MSG 
-				WHERE %s 
+				FROM MSG
+				WHERE %s
 				ORDER BY Sequence ASC
 			`, strings.Join(conditions, " AND "))
+
+			// 无 sender / keyword 过滤时，分页数量直接下推到 SQL
+			if limit > 0 && len(senders) == 0 && regex == nil {
+				query += fmt.Sprintf(" LIMIT %d", offset+limit)
+			}
 
 			// 执行查询
 			rows, err := db.QueryContext(ctx, query, args...)
@@ -331,21 +347,26 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 				msg.CompressContent = compressContent
 				msg.BytesExtra = bytesExtra
 
+				// 应用sender过滤：优先基于原始字段判断，避免不必要的 Wrap（含 XML 解析）开销
+				wrapCheck := false
+				if len(senders) > 0 {
+					switch msg.Type & 0xFFFFFFFF {
+					case model.MessageTypeShare, model.MessageTypeSystem:
+						// 拍一拍 / 系统消息的 Sender 在内容解析阶段才会确定，Wrap 后再过滤
+						wrapCheck = true
+					default:
+						if !matchAny(rawSender(&msg), senders) {
+							continue // 不匹配sender，跳过此消息
+						}
+					}
+				}
+
 				// 将消息转换为标准格式
 				message := msg.Wrap()
 
 				// 应用sender过滤
-				if len(senders) > 0 {
-					senderMatch := false
-					for _, s := range senders {
-						if message.Sender == s {
-							senderMatch = true
-							break
-						}
-					}
-					if !senderMatch {
-						continue // 不匹配sender，跳过此消息
-					}
+				if wrapCheck && !matchAny(message.Sender, senders) {
+					continue // 不匹配sender，跳过此消息
 				}
 
 				// 应用keyword过滤
@@ -749,23 +770,25 @@ func (ds *DataSource) GetVoice(ctx context.Context, key string) (*model.Media, e
 		if err != nil {
 			return nil, errors.QueryFailed(query, err)
 		}
-		defer rows.Close()
 
+		var voiceData []byte
 		for rows.Next() {
-			var voiceData []byte
-			err := rows.Scan(
-				&voiceData,
-			)
-			if err != nil {
+			if err := rows.Scan(&voiceData); err != nil {
+				rows.Close()
 				return nil, errors.ScanRowFailed(err)
 			}
 			if len(voiceData) > 0 {
-				return &model.Media{
-					Type: "voice",
-					Key:  key,
-					Data: voiceData,
-				}, nil
+				break
 			}
+		}
+		rows.Close()
+
+		if len(voiceData) > 0 {
+			return &model.Media{
+				Type: "voice",
+				Key:  key,
+				Data: voiceData,
+			}, nil
 		}
 	}
 
@@ -775,6 +798,38 @@ func (ds *DataSource) GetVoice(ctx context.Context, key string) (*model.Media, e
 // Close 实现 DataSource 接口的 Close 方法
 func (ds *DataSource) Close() error {
 	return ds.dbm.Close()
+}
+
+// rawSender 在不解析消息内容的前提下获取发送人 ID
+func rawSender(msg *model.MessageV3) string {
+	if strings.HasSuffix(msg.StrTalker, "@chatroom") {
+		if len(msg.BytesExtra) != 0 {
+			if bytesExtra := model.ParseBytesExtra(msg.BytesExtra); bytesExtra != nil {
+				return bytesExtra[1]
+			}
+		}
+		return ""
+	}
+	if msg.IsSender == 1 {
+		return ""
+	}
+	return msg.StrTalker
+}
+
+func matchAny(s string, list []string) bool {
+	for _, item := range list {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 // GetBizMessages v3 Windows 微信不支持公众号读取

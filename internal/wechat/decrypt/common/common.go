@@ -2,7 +2,6 @@ package common
 
 import (
 	"bytes"
-	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
 	"encoding/binary"
@@ -83,6 +82,10 @@ func ValidateKey(page1 []byte, key []byte, salt []byte, hashFunc func() hash.Has
 
 	_, macKey := deriveKeys(key, salt)
 
+	return ValidateMacKey(page1, macKey, hashFunc, hmacSize, reserve, pageSize)
+}
+
+func ValidateMacKey(page1 []byte, macKey []byte, hashFunc func() hash.Hash, hmacSize int, reserve int, pageSize int) bool {
 	mac := hmac.New(hashFunc, macKey)
 	dataEnd := pageSize - reserve + IVSize
 	mac.Write(page1[SaltSize:dataEnd])
@@ -97,7 +100,7 @@ func ValidateKey(page1 []byte, key []byte, salt []byte, hashFunc func() hash.Has
 	return hmac.Equal(calculatedMAC, storedMAC)
 }
 
-func DecryptPage(pageBuf []byte, encKey []byte, macKey []byte, pageNum int64, hashFunc func() hash.Hash, hmacSize int, reserve int, pageSize int) ([]byte, error) {
+func DecryptPage(pageBuf []byte, block cipher.Block, macKey []byte, pageNum int64, hashFunc func() hash.Hash, hmacSize int, reserve int, pageSize int) ([]byte, error) {
 	offset := 0
 	if pageNum == 0 {
 		offset = SaltSize
@@ -120,19 +123,8 @@ func DecryptPage(pageBuf []byte, encKey []byte, macKey []byte, pageNum int64, ha
 	}
 
 	iv := pageBuf[pageSize-reserve : pageSize-reserve+IVSize]
-	block, err := aes.NewCipher(encKey)
-	if err != nil {
-		return nil, errors.DecryptCreateCipherFailed(err)
-	}
-
 	mode := cipher.NewCBCDecrypter(block, iv)
+	mode.CryptBlocks(pageBuf[offset:pageSize-reserve], pageBuf[offset:pageSize-reserve])
 
-	encrypted := make([]byte, pageSize-reserve-offset)
-	copy(encrypted, pageBuf[offset:pageSize-reserve])
-
-	mode.CryptBlocks(encrypted, encrypted)
-
-	decryptedPage := append(encrypted, pageBuf[pageSize-reserve:pageSize]...)
-
-	return decryptedPage, nil
+	return pageBuf[offset:], nil
 }

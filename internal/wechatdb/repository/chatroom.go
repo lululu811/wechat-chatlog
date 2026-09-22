@@ -53,7 +53,10 @@ func (r *Repository) initChatRoomCache(ctx context.Context) error {
 		}
 	}
 
-	for _, contact := range r.chatRoomInContact {
+	r.mu.RLock()
+	chatRoomInContact := r.chatRoomInContact
+	r.mu.RUnlock()
+	for _, contact := range chatRoomInContact {
 		if _, ok := chatRoomMap[contact.UserName]; !ok {
 			chatRoom := &model.ChatRoom{
 				Name:     contact.UserName,
@@ -86,12 +89,14 @@ func (r *Repository) initChatRoomCache(ctx context.Context) error {
 	sort.Strings(chatRoomRemark)
 	sort.Strings(chatRoomNickName)
 
+	r.mu.Lock()
 	r.chatRoomCache = chatRoomMap
 	r.remarkToChatRoom = remarkToChatRoom
 	r.nickNameToChatRoom = nickNameToChatRoom
 	r.chatRoomList = chatRoomList
 	r.chatRoomRemark = chatRoomRemark
 	r.chatRoomNickName = chatRoomNickName
+	r.mu.Unlock()
 
 	return nil
 }
@@ -116,7 +121,10 @@ func (r *Repository) GetChatRooms(ctx context.Context, key string, limit, offset
 			return ret[offset:end], nil
 		}
 	} else {
+		r.mu.RLock()
 		list := r.chatRoomList
+		cache := r.chatRoomCache
+		r.mu.RUnlock()
 		if limit > 0 {
 			end := offset + limit
 			if end > len(list) {
@@ -128,7 +136,7 @@ func (r *Repository) GetChatRooms(ctx context.Context, key string, limit, offset
 			list = list[offset:end]
 		}
 		for _, name := range list {
-			ret = append(ret, r.chatRoomCache[name])
+			ret = append(ret, cache[name])
 		}
 	}
 
@@ -145,6 +153,9 @@ func (r *Repository) GetChatRoom(ctx context.Context, key string) (*model.ChatRo
 
 // enrichChatRoom 从联系人信息中补充群聊信息
 func (r *Repository) enrichChatRoom(chatRoom *model.ChatRoom) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	if contact, ok := r.contactCache[chatRoom.Name]; ok {
 		chatRoom.Remark = contact.Remark
 		chatRoom.NickName = contact.NickName
@@ -152,6 +163,9 @@ func (r *Repository) enrichChatRoom(chatRoom *model.ChatRoom) {
 }
 
 func (r *Repository) findChatRoom(key string) *model.ChatRoom {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	if chatRoom, ok := r.chatRoomCache[key]; ok {
 		return chatRoom
 	}
@@ -178,6 +192,9 @@ func (r *Repository) findChatRoom(key string) *model.ChatRoom {
 }
 
 func (r *Repository) findChatRooms(key string) []*model.ChatRoom {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	ret := make([]*model.ChatRoom, 0)
 	distinct := make(map[string]bool)
 	if chatRoom, ok := r.chatRoomCache[key]; ok {

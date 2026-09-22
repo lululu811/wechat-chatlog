@@ -89,7 +89,13 @@ func LoadServiceConfig(configPath string, cmdConf map[string]any) (*ServerConfig
 		}
 	}
 
-	b, _ := json.Marshal(conf)
+	masked := *conf
+	masked.DataKey = maskSecret(masked.DataKey)
+	masked.ImgKey = maskSecret(masked.ImgKey)
+	masked.AuthToken = maskSecret(masked.AuthToken)
+	masked.LLMAPIKey = maskSecret(masked.LLMAPIKey)
+	masked.Webhook = nil
+	b, _ := json.Marshal(masked)
 	log.Info().Msgf("server config: %s", string(b))
 
 	return conf, scm, nil
@@ -102,4 +108,14 @@ var DataDirConfigs = map[string]bool{
 	"full_version": true,
 	"data_key":     true,
 	"img_key":      true,
+}
+
+func maskSecret(s string) string {
+	if len(s) <= 4 {
+		if s == "" {
+			return ""
+		}
+		return "***"
+	}
+	return s[:4] + "***"
 }

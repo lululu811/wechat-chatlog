@@ -130,7 +130,7 @@ func (a *Account) DecryptDatabase(ctx context.Context, dbPath, outputPath string
 	}
 
 	// 创建输出文件
-	output, err := os.Create(outputPath)
+	output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

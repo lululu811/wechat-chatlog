@@ -41,7 +41,10 @@ func (r *Repository) enrichMessage(msg *model.Message) {
 	// 处理群聊消息
 	if msg.IsChatRoom {
 		// 补充群聊名称
-		if chatRoom, ok := r.chatRoomCache[msg.Talker]; ok {
+		r.mu.RLock()
+		chatRoom, ok := r.chatRoomCache[msg.Talker]
+		r.mu.RUnlock()
+		if ok {
 			msg.TalkerName = chatRoom.DisplayName()
 
 			// 补充发送者在群里的显示名称
@@ -69,7 +72,7 @@ func (r *Repository) parseTalkerAndSender(ctx context.Context, talker, sender st
 		for i := 0; i < len(talkers); i++ {
 			if contact, _ := r.GetContact(ctx, talkers[i]); contact != nil {
 				talkers[i] = contact.UserName
-			} else if chatRoom, _ := r.GetChatRoom(ctx, talker); chatRoom != nil {
+			} else if chatRoom, _ := r.GetChatRoom(ctx, talkers[i]); chatRoom != nil {
 				talkers[i] = chatRoom.Name
 			}
 		}
@@ -89,19 +92,21 @@ func (r *Repository) parseTalkerAndSender(ctx context.Context, talker, sender st
 
 	senders := util.Str2List(sender, ",")
 	if len(senders) > 0 {
+		// FIXME 大量群聊用户名称重复，无法直接通过 GetContact 获取 ID，后续再优化
+		// 预建 DisplayName → UserName 索引，避免每个 sender 都遍历全部群成员
+		fullDisplayName2User := make(map[string]string)
+		for user := range users {
+			if contact := r.getFullContact(user); contact != nil {
+				if _, ok := fullDisplayName2User[contact.DisplayName()]; !ok {
+					fullDisplayName2User[contact.DisplayName()] = user
+				}
+			}
+		}
 		for i := 0; i < len(senders); i++ {
 			if user, ok := displayName2User[senders[i]]; ok {
 				senders[i] = user
-			} else {
-				// FIXME 大量群聊用户名称重复，无法直接通过 GetContact 获取 ID，后续再优化
-				for user := range users {
-					if contact := r.getFullContact(user); contact != nil {
-						if contact.DisplayName() == senders[i] {
-							senders[i] = user
-							break
-						}
-					}
-				}
+			} else if user, ok := fullDisplayName2User[senders[i]]; ok {
+				senders[i] = user
 			}
 		}
 		sender = strings.Join(senders, ",")

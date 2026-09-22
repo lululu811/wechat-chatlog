@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"sync"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
@@ -14,6 +15,9 @@ import (
 // Repository 实现了 repository.Repository 接口
 type Repository struct {
 	ds datasource.DataSource
+
+	// 保护下列缓存字段的读写（fsnotify 回调会整体重建缓存）
+	mu sync.RWMutex
 
 	// Cache for contact
 	contactCache      map[string]*model.Contact

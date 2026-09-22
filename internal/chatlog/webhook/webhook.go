@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -142,6 +143,7 @@ type MessageWebhook struct {
 	conf     *conf.WebhookItem
 	client   *http.Client
 	db       *wechatdb.DB
+	mu       sync.Mutex
 	lastTime time.Time
 }
 
@@ -157,6 +159,9 @@ func NewMessageWebhook(conf *conf.WebhookItem, db *wechatdb.DB, host string) *Me
 }
 
 func (m *MessageWebhook) Do(event fsnotify.Event) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	messages, err := m.db.GetMessages(m.lastTime, time.Now().Add(time.Minute*10), m.conf.Talker, m.conf.Sender, m.conf.Keyword, 0, 0)
 	if err != nil {
 		log.Error().Err(err).Msgf("get messages failed")
@@ -183,13 +188,18 @@ func (m *MessageWebhook) Do(event fsnotify.Event) {
 		"messages": messages,
 	}
 	body, _ := json.Marshal(ret)
-	req, _ := http.NewRequest("POST", m.conf.URL, bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", m.conf.URL, bytes.NewBuffer(body))
+	if err != nil {
+		log.Error().Err(err).Msgf("new request failed")
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 
-	log.Info().Msgf("post messages to %s, body: %s", m.conf.URL, string(body))
+	log.Debug().Msgf("post %d messages to %s", len(messages), m.conf.URL)
 	resp, err := m.client.Do(req)
 	if err != nil {
 		log.Error().Err(err).Msgf("post messages failed")
+		return
 	}
 	defer resp.Body.Close()
 

@@ -215,6 +215,12 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 		}
 	}
 
+	// keyword 为纯文本时（无正则元字符），文本消息可用 SQL LIKE 粗筛（正则精筛兜底）
+	likePattern := ""
+	if keyword != "" && regexp.QuoteMeta(keyword) == keyword {
+		likePattern = "%" + escapeLike(keyword) + "%"
+	}
+
 	// 从每个相关数据库中查询消息，并在读取时进行过滤
 	filteredMessages := []*model.Message{}
 
@@ -243,15 +249,28 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 		tableName := fmt.Sprintf("Chat_%s", talkerMd5)
 
 		// 构建查询条件
+		conditions := []string{"msgCreateTime >= ? AND msgCreateTime <= ?"}
+		args := []interface{}{startTime.Unix(), endTime.Unix()}
+
+		if likePattern != "" {
+			conditions = append(conditions, "(messageType != 1 OR msgContent LIKE ? ESCAPE '\\')")
+			args = append(args, likePattern)
+		}
+
 		query := fmt.Sprintf(`
 			SELECT msgCreateTime, msgContent, messageType, mesDes
-			FROM %s 
-			WHERE msgCreateTime >= ? AND msgCreateTime <= ? 
+			FROM %s
+			WHERE %s
 			ORDER BY msgCreateTime ASC
-		`, tableName)
+		`, tableName, strings.Join(conditions, " AND "))
+
+		// 无 sender / keyword 过滤时，分页数量直接下推到 SQL
+		if limit > 0 && len(senders) == 0 && regex == nil {
+			query += fmt.Sprintf(" LIMIT %d", offset+limit)
+		}
 
 		// 执行查询
-		rows, err := db.QueryContext(ctx, query, startTime.Unix(), endTime.Unix())
+		rows, err := db.QueryContext(ctx, query, args...)
 		if err != nil {
 			// 如果表不存在，跳过此talker
 			if strings.Contains(err.Error(), "no such table") {
@@ -276,21 +295,26 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 				continue
 			}
 
+			// 应用sender过滤：优先基于原始字段判断，避免不必要的 Wrap（含 XML 解析）开销
+			wrapCheck := false
+			if len(senders) > 0 {
+				switch msg.MessageType & 0xFFFFFFFF {
+				case model.MessageTypeShare, model.MessageTypeSystem:
+					// 拍一拍 / 系统消息的 Sender 在内容解析阶段才会确定，Wrap 后再过滤
+					wrapCheck = true
+				default:
+					if !matchAny(rawSender(&msg, talkerItem), senders) {
+						continue // 不匹配sender，跳过此消息
+					}
+				}
+			}
+
 			// 将消息包装为通用模型
 			message := msg.Wrap(talkerItem)
 
 			// 应用sender过滤
-			if len(senders) > 0 {
-				senderMatch := false
-				for _, s := range senders {
-					if message.Sender == s {
-						senderMatch = true
-						break
-					}
-				}
-				if !senderMatch {
-					continue // 不匹配sender，跳过此消息
-				}
+			if wrapCheck && !matchAny(message.Sender, senders) {
+				continue // 不匹配sender，跳过此消息
 			}
 
 			// 应用keyword过滤
@@ -361,6 +385,36 @@ func extractTalkerFromTableName(tableName string) string {
 	}
 
 	return strings.TrimPrefix(tableName, "Chat_")
+}
+
+// rawSender 在不解析消息内容的前提下获取发送人 ID
+func rawSender(msg *model.MessageDarwinV3, talker string) string {
+	if strings.HasSuffix(talker, "@chatroom") {
+		if i := strings.Index(msg.MsgContent, ":\n"); i >= 0 {
+			return msg.MsgContent[:i]
+		}
+		return ""
+	}
+	if msg.MesDes == 0 {
+		return ""
+	}
+	return talker
+}
+
+func matchAny(s string, list []string) bool {
+	for _, item := range list {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 // GetContacts 实现获取联系人信息的方法
