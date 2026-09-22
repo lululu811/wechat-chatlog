@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -359,5 +360,56 @@ func TestPageTemplatesRender(t *testing.T) {
 				t.Errorf("%s 缺少返回 chatlog 原生页的入口", tc.tmplName)
 			}
 		})
+	}
+}
+
+// exportDaysOptionRe 抽取归档时间范围下拉里的选项值。
+var exportDaysOptionRe = regexp.MustCompile(`<option value="(\d+)"`)
+
+// TestExportWindowOptionsCoverBackendMax 锁定「前端可选窗口」与「后端允许窗口」一致。
+//
+// 背景：后端把窗口上限提到 365 天（超过则报错而不是静默夹紧），但前端下拉只给到
+// 180 天，用户根本选不到后端已经支持的范围 —— 能力做了却不可达。
+// 这类漂移不会报错，只会让功能白写，所以用测试钉住。
+func TestExportWindowOptionsCoverBackendMax(t *testing.T) {
+	src := readTemplate(t, "admin.html")
+
+	selStart := strings.Index(src, `id="exportDays"`)
+	if selStart < 0 {
+		t.Fatal("admin.html 未找到 exportDays 下拉")
+	}
+	selEnd := strings.Index(src[selStart:], "</select>")
+	if selEnd < 0 {
+		t.Fatal("exportDays 下拉未闭合")
+	}
+	sel := src[selStart : selStart+selEnd]
+
+	matches := exportDaysOptionRe.FindAllStringSubmatch(sel, -1)
+	if len(matches) == 0 {
+		t.Fatal("exportDays 下拉没有任何选项")
+	}
+
+	seen := make(map[int]bool, len(matches))
+	maxOpt := 0
+	for _, m := range matches {
+		v, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("选项值不是数字：%q", m[1])
+		}
+		if seen[v] {
+			t.Errorf("窗口选项 %d 重复", v)
+		}
+		seen[v] = true
+		if v > maxOpt {
+			maxOpt = v
+		}
+	}
+
+	if maxOpt != maxExportWindowDays {
+		t.Errorf("前端最大窗口 = %d，后端 maxExportWindowDays = %d，两者必须一致",
+			maxOpt, maxExportWindowDays)
+	}
+	if !seen[30] {
+		t.Error("缺少默认窗口 30 天")
 	}
 }
