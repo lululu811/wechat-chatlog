@@ -808,6 +808,7 @@ func (s *Service) ExportArticle(ctx context.Context, articleID int64) (*ExportAr
 	if err != nil {
 		// 记录失败（含分类，供下次批量归档判断该不该重试）
 		kind := mdexport.KindOf(err)
+		logExportFailure(articleID, "", err)
 		_ = s.store.UpsertExportRecord(articleID, article.URL, "", "", ExportStatusFailed, string(kind), err.Error())
 		return nil, err
 	}
@@ -1300,6 +1301,46 @@ func (s *Service) runExportJob(ctx context.Context, jobID string) {
 		Int("succeeded", succeeded).Int("failed", failed).Msg("bizhub: 归档任务结束")
 }
 
+// exportLogStderrLines 单条归档失败日志里保留的 stderr 行数。
+//
+// 抓取器报错时最后几行才是根因（Python traceback 的异常行在最末），
+// 但全量 stderr 可能有几百行浏览器日志，所以只取尾部。
+const exportLogStderrLines = 15
+
+// logExportFailure 把归档失败「可定位」的那一半信息写进服务日志。
+//
+// 界面和接口上只留一行分类（「脚本执行失败」），这是对的 —— 用户不需要看 traceback。
+// 但脚本 stderr 里的原文（抓取器为什么退出、浏览器为什么起不来）原本被直接丢掉，
+// 于是排查只剩「换个环境再试一次」这种办法，代价极高且不一定能复现。
+//
+// 只写日志、不进库：stderr 可能很长且含本机绝对路径，塞进任务行既撑爆字段
+// 又把路径带给了前端。jobID 为空表示单篇导出（非任务内）。
+func logExportFailure(articleID int64, jobID string, err error) {
+	ev := log.Warn().Int64("articleID", articleID).
+		Str("kind", string(mdexport.KindOf(err)))
+	if jobID != "" {
+		ev = ev.Str("jobID", jobID)
+	}
+	var ee *mdexport.ExportError
+	if errors.As(err, &ee) {
+		ev = ev.Int("exitCode", ee.ExitCode).
+			Str("stderr", tailLines(ee.Stderr, exportLogStderrLines))
+	}
+	ev.Msg("bizhub: 归档失败详情")
+}
+
+// tailLines 取最后 n 行；空输入返回空串。
+func tailLines(s string, n int) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // releaseExportJob 释放并发名额（幂等）。实际释放由 launchExportJob 的 defer 兜底。
 func (s *Service) releaseExportJob(jobID string) {
 	s.jobMu.Lock()
@@ -1335,6 +1376,7 @@ func (s *Service) runExportItem(ctx context.Context, exp *mdexport.Exporter, it 
 		it.Status = ExportItemFailed
 		it.Kind = string(kind)
 		it.Error = err.Error()
+		logExportFailure(it.ArticleID, it.JobID, err)
 		_ = s.store.UpdateExportJobItem(it)
 		_ = s.store.UpsertExportRecord(article.ID, article.URL, "", "",
 			ExportStatusFailed, string(kind), err.Error())

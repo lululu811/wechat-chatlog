@@ -1,12 +1,16 @@
 package bizhub
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 
 	"github.com/sjzar/chatlog/internal/chatlog/bizhub/mdexport"
 	"github.com/sjzar/chatlog/internal/model"
@@ -630,4 +634,68 @@ func TestStartExportJobWithoutConfig(t *testing.T) {
 	if svc.IsExportConfigured() {
 		t.Error("没有注入配置时 IsExportConfigured 应为 false")
 	}
+}
+
+// TestTailLinesKeepsRootCause 归档失败日志取的是 stderr 尾部。
+//
+// 抓取器的报错里，能定位根因的那一行在最后（Python traceback 的异常行），
+// 前面全是浏览器启动 / 页面加载的过程日志。取错方向等于没记。
+func TestTailLinesKeepsRootCause(t *testing.T) {
+	if got := tailLines("", 15); got != "" {
+		t.Errorf("空 stderr 应返回空串，实际 %q", got)
+	}
+
+	lines := make([]string, 40)
+	for i := range lines {
+		lines[i] = "noise line"
+	}
+	lines[39] = "REAL ROOT CAUSE"
+	got := tailLines(strings.Join(lines, "\n")+"\n", 15)
+
+	if !strings.HasSuffix(got, "REAL ROOT CAUSE") {
+		t.Errorf("尾部必须保留根因行，实际以 %q 结尾", got)
+	}
+	if n := len(strings.Split(got, "\n")); n != 15 {
+		t.Errorf("只应保留尾部 15 行，实际 %d 行", n)
+	}
+	if strings.Contains(got, "noise line") == false {
+		t.Error("尾部行数不足时应原样保留，不该截断成空")
+	}
+}
+
+// TestTailLinesShortInput 行数不足时不截断、不补空行。
+func TestTailLinesShortInput(t *testing.T) {
+	got := tailLines("a\nb\nc\n", 15)
+	if got != "a\nb\nc" {
+		t.Errorf("短输入应去掉末尾换行后原样返回，实际 %q", got)
+	}
+}
+
+// TestLogExportFailureKeepsStderr 归档失败时脚本 stderr 必须进服务日志。
+//
+// 这是「exit code 1」那次排查的教训：接口只回一行分类，stderr 被整段丢掉，
+// 于是只能靠换环境复现来猜根因。这条测试保证抓取器的真实报错留得下来。
+func TestLogExportFailureKeepsStderr(t *testing.T) {
+	var buf bytes.Buffer
+	old := zlog.Logger
+	zlog.Logger = zerolog.New(&buf)
+	defer func() { zlog.Logger = old }()
+
+	err := &mdexport.ExportError{
+		Kind:     mdexport.KindScriptFailed,
+		Msg:      "mdexport: 脚本执行失败",
+		ExitCode: 1,
+		Stderr:   "browser launch ok\nTraceback...\nBrowserError: nested sandbox not permitted\n",
+	}
+	logExportFailure(487625, "job_test", err)
+
+	out := buf.String()
+	for _, want := range []string{"nested sandbox not permitted", "487625", "job_test", "exitCode"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("失败日志缺少 %q，实际输出：%s", want, out)
+		}
+	}
+
+	// 非 ExportError 也不能崩（比如 store 报错从 Export 里透出来）
+	logExportFailure(1, "", errors.New("boom"))
 }
