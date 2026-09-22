@@ -1,0 +1,1933 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>动态 · 公众号</title>
+{{template "doc-head"}}
+
+    <style>
+
+        /* biz.html — 动态页（双模式）页面专属样式
+         *
+         * 公共设计令牌、顶栏、导航、轻提示、报告卡片渲染样式在
+         * /biz/static/bizhub.css（源文件 internal/chatlog/bizhub/static/bizhub.css）。
+         * 本文件只放这一页独有的版式：侧栏、操作行、筛选行、看点卡片、
+         * 按天分组的文章流、文章抽屉、AI 汇总浮层。
+         *
+         * 这一页承担原来 /biz 与 /biz/feed 两个页面的职责（设计说明 §2）：
+         * 用模式切换替代页面切换，所以筛选词/时间窗/标签/滚动位置都必须是同一份状态。
+         */
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .btn {
+            padding: 7px 18px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: var(--font-sans);
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            letter-spacing: 0.01em;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-accent {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+        .btn-ghost { background: transparent; }
+        .btn-sm { padding: 5px 14px; font-size: 12px; }
+
+        .search-box {
+            display: flex;
+            align-items: center;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 12px;
+            width: 260px;
+            background: var(--bg);
+            transition: border-color 0.2s;
+        }
+
+        /* ── Layout：动态模式无侧栏（全宽阅读），全部模式 240px 侧栏 + 列表 ── */
+        .layout {
+            display: flex;
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 28px 40px 64px;
+            gap: 28px;
+            align-items: flex-start;
+        }
+        .layout.mode-digest { max-width: 1120px; }
+        .layout.mode-digest .sidebar { display: none; }
+
+        /* ── Sidebar（仅全部模式） ── */
+        .sidebar {
+            width: 240px;
+            flex-shrink: 0;
+            position: sticky;
+            top: 122px;
+        }
+        .sidebar-section {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+        .sidebar-header {
+            padding: 14px 16px 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .sidebar-header h2 {
+            font-family: var(--font-serif);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: 0.02em;
+        }
+        .sidebar-header .manage-link {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .sidebar-header .manage-link:hover { color: var(--accent); }
+
+        /* 侧栏只有 240px，标签横向滚动会把最后一个 chip 切一半，看起来像坏了。
+           标签通常只有几个，换行排列更清楚，也不会藏起来看不见。 */
+        .tag-bar {
+            display: flex;
+            gap: 6px;
+            padding: 0 16px 12px;
+            flex-wrap: wrap;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .tag-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 100px;
+            font-size: 12px;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            font-family: var(--font-sans);
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .tag-chip:hover { border-color: var(--text-tertiary); }
+        .tag-chip.active {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+        .tag-chip .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .tag-chip.active .dot { background: rgba(255,255,255,0.7); }
+        .tag-chip.chip-watch { color: var(--accent); }
+        .tag-chip.chip-watch.active { color: #fff; }
+
+        .account-list {
+            max-height: calc(100vh - 320px);
+            overflow-y: auto;
+        }
+        .account-list::-webkit-scrollbar { width: 4px; }
+        .account-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        .account-item {
+            position: relative;
+            padding: 10px 14px 10px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s;
+            border-bottom: 1px solid var(--border-light);
+            animation: fadeUp 0.18s ease both;
+        }
+        .account-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: var(--accent);
+            transform: scaleY(0);
+            transform-origin: center;
+            transition: transform 0.18s ease;
+        }
+        .account-item:last-child { border-bottom: none; }
+        .account-item:hover { background: var(--hover); }
+        .account-item.active { background: var(--accent-bg); }
+        .account-item.active::before { transform: scaleY(1); }
+        .account-item.active .account-name { color: var(--accent); font-weight: 500; }
+        .account-info { flex: 1; min-width: 0; }
+        .account-name {
+            font-size: 13px;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            display: block;
+            transition: color 0.15s;
+        }
+        .account-tags {
+            display: flex;
+            gap: 3px;
+            margin-top: 3px;
+            flex-wrap: wrap;
+        }
+        .account-tag {
+            font-size: 10px;
+            padding: 1px 6px;
+            border-radius: 100px;
+            color: #fff;
+            line-height: 1.4;
+        }
+        .star-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 15px;
+            line-height: 1;
+            padding: 3px;
+            color: var(--text-tertiary);
+            transition: color 0.15s, transform 0.15s;
+            flex-shrink: 0;
+        }
+        .star-btn:hover { color: var(--accent); transform: scale(1.15); }
+        .star-btn.on { color: var(--accent); }
+        .account-count {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+            flex-shrink: 0;
+            background: var(--bg);
+            border-radius: 100px;
+            padding: 1px 8px;
+            line-height: 1.5;
+            min-width: 28px;
+            text-align: center;
+        }
+        .account-item.active .account-count {
+            background: var(--surface);
+            color: var(--accent);
+        }
+
+        /* ── Main ── */
+        .main { flex: 1; min-width: 0; }
+        .main-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            margin-bottom: 16px;
+        }
+
+        /* 操作行：模式切换 · 搜索 · 时间窗 · AI 汇总（设计说明 §3.1） */
+        .operate-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 20px;
+            flex-wrap: wrap;
+        }
+        .operate-row .search-box { flex: 1; min-width: 180px; }
+
+        .seg-control button {
+            padding: 7px 14px;
+            border: none;
+            background: transparent;
+            font-size: 12.5px;
+            font-family: var(--font-sans);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+            border-right: 1px solid var(--border-light);
+        }
+
+        /* 筛选行：常驻「我的收藏」，其余 chip 与计数在有筛选时出现 */
+        .filter-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 20px 14px;
+            flex-wrap: wrap;
+            font-size: 12.5px;
+        }
+        .filter-bar .filter-label {
+            color: var(--text-tertiary);
+            font-size: 11.5px;
+        }
+        .filter-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+        .filter-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 10px;
+            border-radius: 100px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            font-family: var(--font-sans);
+            transition: all 0.18s;
+            user-select: none;
+        }
+        .filter-chip:hover { border-color: var(--accent); color: var(--accent); }
+        .filter-chip.active {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+        .filter-chip .x { opacity: 0.7; font-size: 13px; line-height: 1; }
+        .filter-count {
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+            margin-left: auto;
+        }
+
+        /* ── 看点卡片（仅动态模式） ── */
+        .digest-card {
+            background: var(--surface);
+            border: 1px solid var(--accent);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            margin-bottom: 16px;
+            animation: fadeUp 0.22s ease both;
+        }
+        .digest-card[hidden] { display: none; }
+        .digest-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 20px 12px;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .digest-title {
+            font-family: var(--font-serif);
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: 0.02em;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+        .digest-title::before {
+            content: '';
+            width: 3px;
+            height: 13px;
+            background: var(--accent);
+            border-radius: 2px;
+        }
+        .digest-stats {
+            font-size: 11.5px;
+            color: var(--text-tertiary);
+            margin-top: 5px;
+            font-variant-numeric: tabular-nums;
+        }
+        .digest-body { padding: 14px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
+        .digest-headline {
+            font-family: var(--font-serif);
+            font-size: 16px;
+            font-weight: 600;
+            line-height: 1.7;
+            color: var(--text);
+            padding: 2px 0 2px 12px;
+            border-left: 3px solid var(--accent);
+            letter-spacing: 0.01em;
+        }
+        .digest-themes { display: flex; flex-direction: column; gap: 10px; }
+        .digest-theme-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px 0;
+            border-bottom: 1px dashed var(--border-light);
+        }
+        .digest-theme-item:last-child { border-bottom: none; }
+        .digest-theme-head {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            justify-content: space-between;
+        }
+        .digest-theme-title {
+            font-family: var(--font-serif);
+            font-size: 13.5px;
+            font-weight: 600;
+            color: var(--accent);
+            line-height: 1.5;
+        }
+        .digest-theme-count {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            background: var(--accent-bg);
+            padding: 1px 8px;
+            border-radius: 100px;
+            flex-shrink: 0;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+        .digest-theme-body {
+            font-size: 12.5px;
+            line-height: 1.65;
+            color: var(--text-secondary);
+            font-family: var(--font-serif);
+        }
+        .digest-keywords { display: flex; flex-wrap: wrap; gap: 6px; }
+        .keyword-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 100px;
+            font-size: 12px;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-secondary);
+            font-family: var(--font-sans);
+            transition: all 0.18s;
+        }
+        .keyword-chip:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-bg);
+        }
+        .keyword-chip .kw-count {
+            font-size: 10.5px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+        }
+        .digest-hottakes {
+            border-top: 1px dashed var(--border-light);
+            padding-top: 12px;
+        }
+        .digest-hottakes-label {
+            font-size: 11px;
+            letter-spacing: 0.18em;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+        .digest-hottakes ol { list-style: decimal inside; padding: 0; margin: 0; }
+        .digest-hottakes ol li {
+            font-family: var(--font-serif);
+            font-size: 12.5px;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            border-left: 2px solid var(--accent);
+            padding: 5px 0 5px 10px;
+            margin-bottom: 6px;
+        }
+        .digest-hottakes ol li::marker { color: var(--accent); font-weight: 600; }
+        .digest-hottakes ol li:last-child { margin-bottom: 0; }
+        .digest-foot {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            border-top: 1px solid var(--border-light);
+            padding: 9px 20px;
+            font-size: 11.5px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+        }
+        .digest-tag {
+            background: var(--accent-bg);
+            color: var(--accent);
+            padding: 1px 7px;
+            border-radius: 100px;
+            font-weight: 500;
+        }
+        .digest-note {
+            padding: 16px 20px;
+            font-size: 12.5px;
+            color: var(--text-tertiary);
+            font-family: var(--font-serif);
+            line-height: 1.7;
+        }
+        .digest-skeleton { padding: 14px 20px; display: flex; flex-direction: column; gap: 10px; }
+        .digest-skeleton-row {
+            height: 12px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, var(--border-light) 25%, var(--hover) 50%, var(--border-light) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.3s infinite;
+        }
+        .digest-skeleton-row.title { height: 18px; width: 85%; }
+        .digest-skeleton-row.short { width: 60%; }
+
+        /* ── 文章流：按天分组 ── */
+        .day-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--text-tertiary);
+            font-family: var(--font-serif);
+            letter-spacing: 0.06em;
+            padding: 2px 2px 0;
+        }
+        .day-head::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border-light);
+        }
+        .day-head.hidden-by-filter { display: none; }
+
+        .article-stream {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .article-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px 24px;
+            box-shadow: var(--shadow);
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+            animation: fadeUp 0.18s ease both;
+            position: relative;
+            cursor: pointer;
+        }
+        .article-card.bookmarked {
+            border-color: var(--accent);
+            background: linear-gradient(180deg, var(--accent-bg) 0%, var(--surface) 80px);
+        }
+        .article-card.hidden-by-filter { display: none; }
+        .article-title {
+            font-family: var(--font-serif);
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 6px;
+            line-height: 1.55;
+            padding-right: 32px;
+        }
+        .article-title a {
+            color: inherit;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .article-title a:hover { color: var(--accent); }
+        .article-desc {
+            font-size: 13.5px;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            line-height: 1.7;
+            word-break: break-word;
+            font-family: var(--font-serif);
+        }
+        .article-desc.collapsed {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .article-desc-toggle {
+            background: none;
+            border: none;
+            padding: 0;
+            margin: -4px 0 10px;
+            font-size: 12px;
+            color: var(--accent);
+            cursor: pointer;
+            font-family: var(--font-sans);
+        }
+        .article-desc-toggle:hover { text-decoration: underline; }
+        .article-desc-toggle.hidden { display: none; }
+        .article-meta {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .article-meta .meta-sep { margin: 0 6px; opacity: 0.6; }
+
+        .bookmark-btn {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+            padding: 6px;
+            color: var(--text-tertiary);
+            transition: color 0.18s, transform 0.18s;
+            border-radius: 4px;
+        }
+        .bookmark-btn:hover {
+            color: var(--accent);
+            transform: scale(1.15);
+            background: var(--accent-bg);
+        }
+        .bookmark-btn.on { color: var(--accent); }
+        .bookmark-btn:disabled { cursor: not-allowed; opacity: 0.6; transform: none; }
+
+        .filter-empty {
+            background: var(--surface);
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+            padding: 36px 28px;
+            text-align: center;
+            color: var(--text-tertiary);
+            font-size: 13px;
+        }
+        .filter-empty p { margin-bottom: 12px; }
+        .filter-empty .clear-filter {
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 14px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--surface);
+            color: var(--accent);
+            font-size: 12px;
+            cursor: pointer;
+            font-family: var(--font-sans);
+        }
+        .filter-empty .clear-filter:hover { border-color: var(--accent); }
+
+        .empty-state {
+            padding: 72px 28px;
+            text-align: center;
+            color: var(--text-tertiary);
+        }
+
+        .sk-title { height: 15px; width: 58%; margin-bottom: 10px; }
+        .sk-line { height: 12px; width: 100%; margin-bottom: 8px; }
+        .sk-star {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+        }
+
+        .load-more { padding: 4px 0 8px; text-align: center; }
+        .load-more button {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            padding: 8px 28px;
+            border-radius: 6px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-family: var(--font-sans);
+            transition: all 0.2s;
+        }
+        .load-more button:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* ── 文章抽屉（宽 520px，右侧滑出，ESC 关闭） ── */
+        .drawer-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(26,26,26,0.34);
+            backdrop-filter: blur(2px);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.22s ease, visibility 0.22s;
+            z-index: 1100;
+        }
+        .drawer-overlay.show { opacity: 1; visibility: visible; }
+        .drawer {
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 520px;
+            max-width: 100%;
+            background: var(--surface);
+            border-left: 1px solid var(--border);
+            box-shadow: -8px 0 32px rgba(0,0,0,0.14);
+            transform: translateX(100%);
+            transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 1101;
+            display: flex;
+            flex-direction: column;
+        }
+        .drawer.show { transform: translateX(0); }
+        .drawer-head {
+            padding: 22px 26px 16px;
+            border-bottom: 1px solid var(--border-light);
+            position: relative;
+        }
+        .drawer-close {
+            position: absolute;
+            top: 16px;
+            right: 18px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 20px;
+            line-height: 1;
+            color: var(--text-tertiary);
+            padding: 4px;
+        }
+        .drawer-close:hover { color: var(--text); }
+        .drawer-title {
+            font-family: var(--font-serif);
+            font-size: 19px;
+            font-weight: 600;
+            line-height: 1.5;
+            color: var(--text);
+            padding-right: 32px;
+            margin-bottom: 8px;
+        }
+        .drawer-meta {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .drawer-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 26px;
+            font-family: var(--font-serif);
+            font-size: 14px;
+            line-height: 1.85;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .drawer-body .drawer-hint { color: var(--text-tertiary); font-style: italic; }
+        .drawer-foot {
+            border-top: 1px solid var(--border-light);
+            padding: 14px 26px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .drawer-foot .grow { margin-left: auto; }
+
+        /* ── AI 汇总浮层 ── */
+        .popover-layer {
+            position: absolute;
+            width: 340px;
+            max-width: calc(100vw - 24px);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 16px 48px rgba(0,0,0,0.16);
+            z-index: 1050;
+            padding: 18px 20px 16px;
+            animation: fadeUp 0.16s ease both;
+        }
+        .popover-layer[hidden] { display: none; }
+        .popover-title {
+            font-family: var(--font-serif);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 14px;
+        }
+        .popover-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .popover-row .popover-label {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            flex-shrink: 0;
+        }
+        .popover-layer textarea {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 9px 11px;
+            font-size: 12.5px;
+            font-family: var(--font-sans);
+            line-height: 1.55;
+            color: var(--text);
+            background: var(--bg);
+            resize: vertical;
+            min-height: 62px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .popover-layer textarea:focus { border-color: var(--accent); }
+        .instruction-hint {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            margin-top: 6px;
+        }
+        .popover-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-top: 14px;
+        }
+        .popover-result {
+            margin-top: 12px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            background: var(--accent-bg);
+            font-size: 12.5px;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .popover-result[hidden] { display: none; }
+        .popover-result a { color: var(--accent); font-weight: 500; text-decoration: none; }
+        .popover-result a:hover { text-decoration: underline; }
+        .chev { font-size: 10px; opacity: 0.7; }
+
+        @media (max-width: 900px) {
+            .layout { padding: 24px 20px 48px; gap: 16px; }
+        }
+        @media (max-width: 768px) {
+            .layout { flex-direction: column; padding: 16px 16px 48px; gap: 16px; }
+            .sidebar { width: 100%; position: static; }
+            .account-list {
+                display: flex;
+                overflow-x: auto;
+                max-height: none;
+                gap: 8px;
+                padding: 12px 14px;
+            }
+            .account-item {
+                border: 1px solid var(--border);
+                border-radius: 100px;
+                padding: 6px 14px;
+                flex-shrink: 0;
+                animation: none;
+            }
+            .account-item::before { display: none; }
+            .account-item.active { border-color: var(--accent); }
+            .account-name { font-size: 12.5px; }
+            .operate-row { padding: 12px 16px; }
+            .operate-row .search-box { width: 100%; flex: none; order: 9; }
+            .filter-bar { padding: 0 16px 12px; }
+            .drawer { width: 100%; }
+            .digest-head, .digest-body, .digest-foot { padding-left: 16px; padding-right: 16px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>动态</h1>
+            <span class="header-stats">{{len .Accounts}} 个公众号 · {{.ArticleCount}} 篇文章</span>
+        </div>
+        <div class="header-right">
+            <button class="btn btn-accent" id="syncBtn" onclick="triggerSync()" aria-label="同步全部公众号文章">同步</button>
+        </div>
+    </div>
+
+{{template "top-nav" "biz"}}
+
+    <div class="layout mode-digest" id="layoutRoot">
+        <aside class="sidebar" id="accountSidebar" aria-label="公众号与标签">
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    <h2>公众号</h2>
+                    <a class="manage-link" href="/biz/admin">标签管理</a>
+                </div>
+                <div class="tag-bar" id="tagBar">
+                    <span class="tag-chip active" data-tagid="" onclick="selectTag('')">全部</span>
+                    <span class="tag-chip chip-watch" data-tagid="watch" onclick="selectTag('watch')">★ 关注</span>
+                    {{range .Tags}}
+                    <span class="tag-chip" data-tagid="{{.ID}}" onclick="selectTag('{{.ID}}')">
+                        <span class="dot" style="background:{{.Color}}"></span>{{.Name}}
+                    </span>
+                    {{end}}
+                </div>
+                <div class="account-list" id="accountList">
+                    <div class="account-item active" data-ghid="" data-watched="0" data-count="{{.ArticleCount}}">
+                        <div class="account-info">
+                            <span class="account-name">全部公众号</span>
+                        </div>
+                        <span class="account-count">{{.ArticleCount}}</span>
+                    </div>
+                    {{range .Accounts}}
+                    <div class="account-item" data-ghid="{{.GHID}}" data-watched="{{if .Watched}}1{{else}}0{{end}}" data-count="{{.ArticleCount}}" data-updated="{{.UpdatedAt}}">
+                        <div class="account-info">
+                            <span class="account-name" title="{{.GHName}}">{{if .GHName}}{{.GHName}}{{else}}{{.GHID}}{{end}}</span>
+                            {{if index $.AccountTags .GHID}}
+                            <div class="account-tags">
+                                {{range $tag := (index $.AccountTags .GHID)}}
+                                <span class="account-tag" style="background:{{$tag.Color}}">{{$tag.Name}}</span>
+                                {{end}}
+                            </div>
+                            {{end}}
+                        </div>
+                        <button type="button" class="star-btn {{if .Watched}}on{{end}}" data-ghid="{{.GHID}}" title="{{if .Watched}}取消关注{{else}}关注{{end}}" aria-label="切换关注">{{if .Watched}}★{{else}}☆{{end}}</button>
+                        <span class="account-count">{{.ArticleCount}}</span>
+                    </div>
+                    {{end}}
+                </div>
+            </div>
+        </aside>
+
+        <div class="main">
+            <div class="main-card">
+                <div class="operate-row">
+                    <div class="seg-control" id="modeSeg" role="tablist" aria-label="浏览模式">
+                        <button type="button" data-mode="digest" class="active" role="tab" aria-selected="true">动态</button>
+                        <button type="button" data-mode="all" role="tab" aria-selected="false">全部</button>
+                    </div>
+                    <div class="search-box">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                        </svg>
+                        <input type="text" id="searchInput" placeholder="搜索文章…" aria-label="搜索文章" />
+                    </div>
+                    <div class="seg-control" id="rangeSeg" aria-label="时间窗"></div>
+                    <button class="btn btn-ghost btn-sm" id="aiSummaryBtn" onclick="toggleAIPopover()" aria-haspopup="dialog" aria-expanded="false" aria-controls="aiPopover">AI 汇总 <span class="chev">&#9662;</span></button>
+                </div>
+                <div class="filter-bar" id="filterBar" role="status" aria-live="polite">
+                    <span class="filter-label">筛选</span>
+                    <span class="filter-chip" id="bookmarkFilterChip" onclick="toggleBookmarkFilter()" role="button" tabindex="0" aria-pressed="false">
+                        <span class="star" id="bookmarkFilterStar">&#9734;</span>我的收藏
+                    </span>
+                    <span class="filter-chips" id="filterChips"></span>
+                    <span class="filter-count" id="filterCount"></span>
+                </div>
+            </div>
+
+            <div class="digest-card" id="digestCard" hidden>
+                <div class="digest-head">
+                    <div>
+                        <div class="digest-title">今日看点</div>
+                        <div class="digest-stats" id="digestStats">加载中…</div>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-sm" id="digestRefreshBtn" onclick="refreshDigest()">刷新</button>
+                </div>
+                <div id="digestContent"></div>
+            </div>
+
+            <div id="articleContainer"></div>
+        </div>
+    </div>
+
+    <!-- AI 汇总浮层：时间窗 · 自定义指令 · 生成 · 跳转报告页（设计说明 §3.1） -->
+    <div class="popover-layer" id="aiPopover" hidden role="dialog" aria-label="AI 汇总">
+        <div class="popover-title">生成 AI 汇总</div>
+        <div class="popover-row">
+            <span class="popover-label">时间窗</span>
+            <div class="seg-control" id="popoverRangeSeg"></div>
+        </div>
+        <textarea id="instructionInput" rows="3" placeholder="可选：自定义指令。例如：只看 AI 与产品创新；给我 3 句话简报；对比上次报告的重点变化" aria-label="汇总自定义指令"></textarea>
+        <div class="instruction-hint">不填则使用默认风格（总评 + 主题 + 重点阅读）。生成过程在后台跑，不影响继续浏览。</div>
+        <div class="popover-result" id="popoverResult" hidden></div>
+        <div class="popover-actions">
+            <a class="btn btn-ghost btn-sm" href="/biz/reports" id="gotoReportsLink">查看报告页</a>
+            <button class="btn btn-accent btn-sm" id="genSummaryBtn" onclick="generateSummary()">生成报告</button>
+        </div>
+    </div>
+
+    <!-- 文章抽屉 -->
+    <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+    <aside class="drawer" id="articleDrawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" aria-hidden="true">
+        <div class="drawer-head">
+            <button type="button" class="drawer-close" id="drawerClose" onclick="closeDrawer()" aria-label="关闭详情">&times;</button>
+            <h2 class="drawer-title" id="drawerTitle">加载中…</h2>
+            <div class="drawer-meta" id="drawerMeta"></div>
+        </div>
+        <div class="drawer-body" id="drawerBody"></div>
+        <div class="drawer-foot" id="drawerFoot"></div>
+    </aside>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/biz/static/bizhub.js"></script>
+    <script src="/biz/static/bizhub-report.js"></script>
+    <script>
+        /* ── 状态 ──
+         * 这一页的状态分两类，别混：
+         *   服务端筛选（会重新拉数据）：mode / q / window / 选中账号
+         *   客户端筛选（只过滤已加载的卡片）：标签 / 收藏
+         * 两类都同步进 URL，刷新与分享后能回到同一视图（设计说明 §4）。
+         */
+        const limit = 50;
+        let mode = 'digest';          // digest = 动态（已关注+时间窗）；all = 全部（资料库）
+        let q = '';                   // 搜索关键词，非空时数据源换成 /search
+        let windowDays = 0;           // 0 = 不限时间；默认值见 defaultWindow()
+        let selectedGHID = '';        // 全部模式下选中的公众号；'' = 全部
+        let selectedAccountName = '';
+        let selectedTag = '';         // 客户端筛选：'' / 'watch' / 标签ID
+        let bookmarkOnly = false;     // 客户端筛选：仅收藏
+        let currentOffset = 0;
+        let listLoading = false;
+        let allArticles = [];
+        let lastTotal = null;
+        let lastDayKey = '';          // 按天分组：上一张卡片所属的日期，用来判断要不要插日期头
+        let drawerArticleId = null;
+        const scrollByMode = { digest: 0, all: 0 };
+        const aiPopoverDays = { value: 3 };
+        let aiPopoverOpen = false;
+
+        const allTags = JSON.parse({{.TagsJSON}} || '[]');
+        const tagGHIDs = JSON.parse({{.AccountTagsJSON}} || '{}');
+
+        function esc(str) {
+            if (str === null || str === undefined) return '';
+            const d = document.createElement('div');
+            d.textContent = String(str);
+            return d.innerHTML;
+        }
+
+        const loadMoreObserver = new IntersectionObserver(entries => {
+            entries.forEach(e => { if (e.isIntersecting) loadMore(); });
+        }, { rootMargin: '240px' });
+
+        /* ── 时间窗 ── */
+        function defaultWindow() {
+            // 动态模式必带时间窗（追更新）；全部模式默认不限，当资料库翻。
+            return mode === 'digest' ? 7 : 0;
+        }
+        function effectiveWindow() {
+            return windowDays > 0 ? windowDays : defaultWindow();
+        }
+        function renderRangeSeg() {
+            const opts = mode === 'all'
+                ? [{ d: 0, label: '不限' }, { d: 1, label: '今天' }, { d: 3, label: '近3天' }, { d: 7, label: '近一周' }]
+                : [{ d: 1, label: '今天' }, { d: 3, label: '近3天' }, { d: 7, label: '近一周' }];
+            const eff = effectiveWindow();
+            document.getElementById('rangeSeg').innerHTML = opts.map(o =>
+                `<button type="button" data-days="${o.d}"${o.d === eff ? ' class="active"' : ''}>${o.label}</button>`).join('');
+        }
+        function renderPopoverRangeSeg() {
+            const opts = [{ d: 1, label: '今天' }, { d: 3, label: '近3天' }, { d: 7, label: '近一周' }];
+            document.getElementById('popoverRangeSeg').innerHTML = opts.map(o =>
+                `<button type="button" data-days="${o.d}"${o.d === aiPopoverDays.value ? ' class="active"' : ''}>${o.label}</button>`).join('');
+        }
+
+        /* ── URL 同步 ──
+         * 只写「与当前模式默认值不同」的项，URL 才能短；读回来时缺省即取默认，
+         * 于是 `?mode=all` 天然等于「全部 + 不限时间」。
+         */
+        function syncURL() {
+            const p = new URLSearchParams();
+            if (mode === 'all') p.set('mode', 'all');
+            if (q) p.set('q', q);
+            if (windowDays !== defaultWindow()) p.set('window', String(windowDays));
+            if (selectedTag) p.set('tags', selectedTag);
+            if (selectedGHID) p.set('ghid', selectedGHID);
+            if (bookmarkOnly) p.set('bm', '1');
+            const token = authToken();
+            if (token) p.set('token', token);
+            const s = p.toString();
+            history.replaceState(null, '', location.pathname + (s ? '?' + s : ''));
+        }
+
+        function readURL() {
+            const p = new URLSearchParams(location.search);
+            mode = p.get('mode') === 'all' ? 'all' : 'digest';
+            q = p.get('q') || '';
+            selectedTag = p.get('tags') || '';
+            selectedGHID = p.get('ghid') || '';
+            bookmarkOnly = p.get('bm') === '1';
+            const w = p.get('window');
+            windowDays = w === null ? defaultWindow() : (parseInt(w, 10) || 0);
+        }
+
+        /* ── 数据源 ── */
+        function streamURL(offset) {
+            if (q) {
+                return `/api/v1/biz/search?keyword=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`;
+            }
+            if (mode === 'digest') {
+                return `/api/v1/biz/feed?days=${effectiveWindow()}&limit=${limit}&offset=${offset}`;
+            }
+            // 全部模式：ghid 空 = 全部公众号；days 空 = 不限时间
+            let u = `/api/v1/biz/articles?limit=${limit}&offset=${offset}`;
+            if (selectedGHID) u += `&ghid=${encodeURIComponent(selectedGHID)}`;
+            const d = effectiveWindow();
+            if (d > 0) u += `&days=${d}`;
+            return u;
+        }
+
+        function emptyMessage() {
+            if (q) return `没有匹配「${q}」的文章`;
+            if (mode === 'digest') return '还没有关注动态，切到「全部」模式，在左侧给公众号加 ☆ 关注';
+            return '这个范围内没有文章，点右上角「同步」拉一次';
+        }
+
+        /* ── 文章流 ── */
+        function dayKey(ts) {
+            const d = new Date(Number(ts) > 1e12 ? Number(ts) : Number(ts) * 1000);
+            if (isNaN(d.getTime())) return '';
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+        function dayLabel(key) {
+            const today = dayKey(Date.now());
+            if (key === today) return '今天';
+            const y = new Date();
+            y.setDate(y.getDate() - 1);
+            if (key === dayKey(y.getTime())) return '昨天';
+            return key.slice(5);
+        }
+
+        function articleItemHTML(a) {
+            let head = '';
+            const key = dayKey(a.publishedAt);
+            if (key && key !== lastDayKey) {
+                lastDayKey = key;
+                head = `<div class="day-head" data-day="${key}">${esc(dayLabel(key))}</div>`;
+            }
+            const bookmarked = !!(a.bookmarked || a.Bookmarked);
+            const srcName = a.ghName || a.ghID || '';
+            const src = srcName ? `<span class="meta-src">${esc(srcName)}</span><span class="meta-sep">·</span>` : '';
+            const desc = a.description || a.Desc || '';
+            return `${head}<div class="article-card${bookmarked ? ' bookmarked' : ''}" data-id="${a.id}" data-ghid="${esc(a.ghID || '')}" data-bookmarked="${bookmarked ? '1' : '0'}">
+                <button type="button" class="bookmark-btn${bookmarked ? ' on' : ''}" data-id="${a.id}" onclick="toggleBookmark(this, event)" title="${bookmarked ? '取消收藏' : '收藏'}" aria-label="${bookmarked ? '取消收藏' : '收藏'}">${bookmarked ? '★' : '☆'}</button>
+                <div class="article-title"><a href="#" onclick="return openDrawerFromClick(event, ${a.id})">${esc(a.title) || '无标题'}</a></div>
+                ${desc ? `<div class="article-desc collapsed">${esc(desc)}</div><button type="button" class="article-desc-toggle hidden" onclick="toggleDesc(this, event)">展开全文</button>` : ''}
+                <div class="article-meta">${src}<span>${esc(formatDate(a.publishedAt))}</span>
+                    <button type="button" class="btn-export-md" onclick="exportArticleMD(${a.id}, this)" title="导出为 Markdown">📄 MD</button>
+                    <button type="button" class="btn-gen-summary" onclick="generateArticleSummary(${a.id}, this)" title="生成摘要">🤖 摘要</button>
+                </div>
+            </div>`;
+        }
+
+        function skeletonHTML() {
+            const item = `<div class="article-card skeleton-card">
+                <div class="sk sk-title"></div>
+                <div class="sk sk-line"></div>
+                <div class="sk sk-line"></div>
+                <div class="sk sk-line short"></div>
+                <div class="sk sk-star"></div>
+            </div>`;
+            return '<div class="article-stream">' + item.repeat(4) + '</div>';
+        }
+
+        function renderArticles(container, articles, replace, emptyMsg) {
+            if (!articles || articles.length === 0) {
+                if (replace) container.innerHTML = emptyStateHTML(emptyMsg);
+                return false;
+            }
+            if (replace) lastDayKey = '';
+            const itemsHTML = articles.map(articleItemHTML).join('');
+            const moreHTML = articles.length >= limit
+                ? '<div class="load-more" id="loadMore"><button type="button" onclick="loadMore()" aria-label="加载更多文章">加载更多</button></div>'
+                : '';
+            if (replace) {
+                container.innerHTML = `<div class="article-stream">${itemsHTML}</div>${moreHTML}`;
+            } else {
+                const lm = container.querySelector('.load-more');
+                if (lm) lm.remove();
+                const stream = container.querySelector('.article-stream');
+                if (stream) stream.insertAdjacentHTML('beforeend', itemsHTML);
+                if (moreHTML) container.insertAdjacentHTML('beforeend', moreHTML);
+            }
+            watchLoadMore();
+            return true;
+        }
+
+        async function loadStream(offset, replace) {
+            if (listLoading) return;
+            listLoading = true;
+            const container = document.getElementById('articleContainer');
+            if (replace) {
+                lastDayKey = '';
+                container.innerHTML = skeletonHTML();
+            }
+            try {
+                const resp = await apiFetch(streamURL(offset));
+                const data = await resp.json();
+                if (!resp.ok || data.error) throw new Error(data.error || '加载失败');
+                lastTotal = typeof data.total === 'number' ? data.total : null;
+                // 列表统一返回 {items, total, limit, offset}（设计说明 §6）
+                const items = data.items || [];
+                if (replace) allArticles = items;
+                else allArticles = allArticles.concat(items);
+                if (renderArticles(container, items, replace, emptyMessage())) {
+                    currentOffset = offset + items.length;
+                    applyArticleFilter();
+                } else {
+                    updateFilterBar(0);
+                }
+            } catch (err) {
+                if (replace) container.innerHTML = emptyStateHTML(err.message || '加载失败');
+                updateFilterBar(0);
+            } finally {
+                listLoading = false;
+            }
+        }
+
+        function loadMore() {
+            if (listLoading) return;
+            loadStream(currentOffset, false);
+        }
+
+        /* ── 筛选（客户端）：标签 / 收藏 ──
+         * 后端列表接口不接标签条件，而标签-公众号关系在 SSR 里已经全量拿到了，
+         * 所以标签过滤在客户端做。代价：只过滤「已加载」的文章 —— 因此筛选行
+         * 同时给出「共 N 篇 / 当前显示 M 篇」，并可继续点「加载更多」翻页。
+         */
+        function tagAllowed(ghid) {
+            if (!selectedTag) return true;
+            if (selectedTag === 'watch') return true; // 「关注」只筛侧栏账号列表，不筛文章
+            const set = tagGHIDs[selectedTag];
+            return !!set && set.indexOf(ghid) !== -1;
+        }
+
+        function applyArticleFilter() {
+            const container = document.getElementById('articleContainer');
+            let visible = 0;
+            container.querySelectorAll('.article-card').forEach(card => {
+                const ok = (!bookmarkOnly || card.dataset.bookmarked === '1')
+                    && (!selectedGHID || card.dataset.ghid === selectedGHID)
+                    && tagAllowed(card.dataset.ghid);
+                card.classList.toggle('hidden-by-filter', !ok);
+                if (ok) visible++;
+            });
+            syncDayHeadVisibility(container);
+            revealDescToggles(container);
+            renderFilterEmpty(container, visible);
+            updateFilterBar(visible);
+        }
+
+        // 一天的卡片全被过滤掉时，日期头也该跟着消失，否则会留下孤零零的日期。
+        function syncDayHeadVisibility(container) {
+            container.querySelectorAll('.day-head').forEach(head => {
+                let el = head.nextElementSibling;
+                let any = false;
+                while (el && !el.classList.contains('day-head')) {
+                    if (el.classList.contains('article-card') && !el.classList.contains('hidden-by-filter')) { any = true; break; }
+                    el = el.nextElementSibling;
+                }
+                head.classList.toggle('hidden-by-filter', !any);
+            });
+        }
+
+        function renderFilterEmpty(container, visible) {
+            const existing = container.querySelector('.filter-empty');
+            const hasFilter = bookmarkOnly || !!selectedTag || !!selectedGHID;
+            if (visible === 0 && hasFilter && container.querySelector('.article-card')) {
+                if (existing) return;
+                const el = document.createElement('div');
+                el.className = 'filter-empty';
+                el.innerHTML = '<p>当前筛选下没有匹配的文章</p><button type="button" class="clear-filter" onclick="clearAllFilters()">清除筛选</button>';
+                container.appendChild(el);
+            } else if (existing) {
+                existing.remove();
+            }
+        }
+
+        function updateFilterBar(visible) {
+            const chips = [];
+            if (selectedTag) chips.push(chipHTML('tag', selectedTag === 'watch' ? '★ 关注' : tagName(selectedTag)));
+            if (selectedGHID) chips.push(chipHTML('ghid', selectedAccountName || selectedGHID));
+            if (q) chips.push(chipHTML('kw', `「${q}」`));
+            document.getElementById('filterChips').innerHTML = chips.join('');
+
+            const parts = [];
+            if (lastTotal !== null) parts.push(`共 ${lastTotal} 篇`);
+            if (typeof visible === 'number') parts.push(`当前显示 ${visible} 篇`);
+            document.getElementById('filterCount').textContent = parts.join(' · ');
+
+            const bm = document.getElementById('bookmarkFilterChip');
+            bm.classList.toggle('active', bookmarkOnly);
+            bm.setAttribute('aria-pressed', bookmarkOnly ? 'true' : 'false');
+            document.getElementById('bookmarkFilterStar').textContent = bookmarkOnly ? '★' : '☆';
+        }
+
+        function chipHTML(kind, label) {
+            return `<span class="filter-chip active" data-clear="${kind}" title="点击清除">${esc(label)}<span class="x">×</span></span>`;
+        }
+        function tagName(id) {
+            const t = allTags.find(t => String(t.id) === String(id));
+            return t ? t.name : `标签 ${id}`;
+        }
+
+        document.getElementById('filterChips').addEventListener('click', e => {
+            const chip = e.target.closest('.filter-chip');
+            if (!chip) return;
+            clearFilter(chip.dataset.clear);
+        });
+
+        function clearFilter(kind) {
+            if (kind === 'tag') selectTag('');
+            else if (kind === 'ghid') selectAccount('', '');
+            else if (kind === 'kw') setSearch('');
+        }
+
+        function toggleBookmarkFilter() {
+            bookmarkOnly = !bookmarkOnly;
+            syncURL();
+            applyArticleFilter();
+        }
+
+        function selectTag(id) {
+            selectedTag = String(id || '');
+            document.querySelectorAll('#tagBar .tag-chip').forEach(el => {
+                el.classList.toggle('active', (el.dataset.tagid || '') === selectedTag);
+            });
+            syncAccountListFilter();
+            syncURL();
+            applyArticleFilter();
+        }
+
+        function syncAccountListFilter() {
+            document.querySelectorAll('#accountList .account-item').forEach(el => {
+                if (!el.dataset.ghid) { el.style.display = ''; return; }  // 「全部公众号」常驻
+                let show = true;
+                if (selectedTag === 'watch') show = el.dataset.watched === '1';
+                else if (selectedTag) show = tagAllowed(el.dataset.ghid);
+                el.style.display = show ? '' : 'none';
+            });
+        }
+
+        function clearAllFilters() {
+            const hadServerFilter = !!q || !!selectedGHID;
+            bookmarkOnly = false;
+            selectedTag = '';
+            selectedGHID = '';
+            selectedAccountName = '';
+            document.getElementById('searchInput').value = '';
+            q = '';
+            selectTag('');
+            syncURL();
+            if (hadServerFilter) loadStream(0, true);
+            else { applyArticleFilter(); }
+        }
+
+        /* ── 模式切换 ──
+         * 设计说明 §4：筛选词/时间窗/标签/收藏都保留，滚动位置按模式各记一份。
+         * 只有「选中的公众号」和「打开的文章抽屉」会清掉 —— 前者在动态模式没有入口，
+         * 留着会变成一个看不见也取消不掉的过滤条件；后者是避免"在全部模式打开的文章
+         * 到动态模式里找不到"。
+         */
+        function switchMode(next) {
+            next = next === 'all' ? 'all' : 'digest';
+            if (next === mode) return;
+            scrollByMode[mode] = window.scrollY;
+            mode = next;
+            closeDrawer();
+            closeAIPopover();
+            if (mode === 'digest' && selectedGHID) {
+                selectedGHID = '';
+                selectedAccountName = '';
+            }
+            currentOffset = 0;
+            syncModeUI();
+            syncURL();
+            loadStream(0, true).then(() => window.scrollTo(0, scrollByMode[mode] || 0));
+        }
+
+        function syncModeUI() {
+            document.getElementById('layoutRoot').classList.toggle('mode-digest', mode === 'digest');
+            document.querySelectorAll('#modeSeg button').forEach(b => {
+                const on = b.dataset.mode === mode;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-selected', on ? 'true' : 'false');
+            });
+            document.querySelectorAll('#accountList .account-item').forEach(el => {
+                el.classList.toggle('active', (el.dataset.ghid || '') === selectedGHID);
+            });
+            renderRangeSeg();
+            syncAccountListFilter();
+            document.getElementById('digestCard').hidden = mode !== 'digest';
+            if (mode === 'digest') loadDigest();
+        }
+
+        document.getElementById('modeSeg').addEventListener('click', e => {
+            const btn = e.target.closest('button');
+            if (btn) switchMode(btn.dataset.mode);
+        });
+
+        document.getElementById('rangeSeg').addEventListener('click', e => {
+            const btn = e.target.closest('button');
+            if (!btn || btn.classList.contains('active')) return;
+            windowDays = parseInt(btn.dataset.days, 10) || 0;
+            currentOffset = 0;
+            renderRangeSeg();
+            syncURL();
+            loadStream(0, true);
+        });
+
+        document.getElementById('popoverRangeSeg').addEventListener('click', e => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            aiPopoverDays.value = parseInt(btn.dataset.days, 10) || 3;
+            renderPopoverRangeSeg();
+        });
+
+        /* ── 账号列表 ── */
+        document.getElementById('accountList').addEventListener('click', async (e) => {
+            const star = e.target.closest('.star-btn');
+            if (star) {
+                e.stopPropagation();
+                await toggleWatch(star);
+                return;
+            }
+            const item = e.target.closest('.account-item');
+            if (!item) return;
+            const nameEl = item.querySelector('.account-name');
+            selectAccount(item.dataset.ghid || '', nameEl ? nameEl.textContent : '');
+        });
+
+        function selectAccount(ghid, name) {
+            selectedGHID = ghid || '';
+            selectedAccountName = selectedGHID ? (name || selectedGHID) : '';
+            document.querySelectorAll('#accountList .account-item').forEach(el => {
+                el.classList.toggle('active', (el.dataset.ghid || '') === selectedGHID);
+            });
+            currentOffset = 0;
+            syncURL();
+            loadStream(0, true);
+        }
+
+        async function toggleWatch(btn) {
+            const ghid = btn.dataset.ghid;
+            const item = btn.closest('.account-item');
+            const watched = item.dataset.watched === '1';
+            const next = !watched;
+            paintWatch(item, btn, next);
+            try {
+                const resp = await apiFetch('/api/v1/biz/admin/accounts/watch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ghIDs: [ghid], watched: next })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || data.error) throw new Error(data.error || '操作失败');
+                toast(next ? '已关注' : '已取消关注');
+                // 关注集合变了，动态模式的数据源就变了 —— 只有正看着动态模式才需要重拉。
+                if (mode === 'digest') loadStream(0, true);
+            } catch (err) {
+                paintWatch(item, btn, watched);
+                toast(err.message, 'error');
+            }
+        }
+
+        function paintWatch(item, btn, on) {
+            item.dataset.watched = on ? '1' : '0';
+            btn.classList.toggle('on', on);
+            btn.textContent = on ? '★' : '☆';
+            btn.title = on ? '取消关注' : '关注';
+            btn.setAttribute('aria-label', on ? '取消关注' : '关注');
+            syncAccountListFilter();
+        }
+
+        /* ── 搜索 ── */
+        let searchTimeout;
+        document.getElementById('searchInput').addEventListener('input', function(e) {
+            clearTimeout(searchTimeout);
+            const kw = e.target.value.trim();
+            searchTimeout = setTimeout(() => setSearch(kw), 320);
+        });
+
+        function setSearch(kw) {
+            q = kw || '';
+            document.getElementById('searchInput').value = q;
+            currentOffset = 0;
+            syncURL();
+            loadStream(0, true);
+        }
+
+        function pickKeyword(word) {
+            setSearch(word);
+            window.scrollTo({ top: 0 });
+        }
+
+        /* ── 收藏 ── */
+        async function toggleBookmark(btn, ev) {
+            if (ev) ev.stopPropagation();
+            const id = btn.dataset.id;
+            const card = btn.closest('.article-card');
+            if (!card) return;
+            const wasOn = btn.classList.contains('on');
+            const next = !wasOn;
+            btn.disabled = true;
+            paintBookmark(btn, card, next);
+            try {
+                const resp = await apiFetch(`/api/v1/biz/articles/${encodeURIComponent(id)}/bookmark`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bookmarked: next })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || data.error) throw new Error(data.error || '操作失败');
+                toast(next ? '已收藏' : '已取消收藏');
+                if (drawerArticleId === Number(id)) renderDrawerBookmark(next);
+                if (bookmarkOnly) applyArticleFilter();
+            } catch (err) {
+                paintBookmark(btn, card, wasOn);
+                toast(err.message || '操作失败', 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function paintBookmark(btn, card, on) {
+            btn.classList.toggle('on', on);
+            btn.textContent = on ? '★' : '☆';
+            btn.title = on ? '取消收藏' : '收藏';
+            btn.setAttribute('aria-label', on ? '取消收藏' : '收藏');
+            card.classList.toggle('bookmarked', on);
+            card.dataset.bookmarked = on ? '1' : '0';
+            const id = btn.dataset.id;
+            const idx = allArticles.findIndex(a => String(a.id) === String(id));
+            if (idx >= 0) allArticles[idx].bookmarked = on;
+        }
+
+        function toggleDesc(btn, ev) {
+            if (ev) ev.stopPropagation();
+            const desc = btn.previousElementSibling;
+            if (!desc) return;
+            const collapsed = desc.classList.toggle('collapsed');
+            btn.textContent = collapsed ? '展开全文' : '收起';
+        }
+
+        /* 简介内容太长时才给「展开全文」按钮：否则默认就全显示了，按钮是多余的。 */
+        function revealDescToggles(container) {
+            container.querySelectorAll('.article-desc').forEach(d => {
+                const btn = d.nextElementSibling;
+                if (!btn || !btn.classList.contains('article-desc-toggle')) return;
+                btn.classList.toggle('hidden', d.scrollHeight <= d.clientHeight + 4);
+            });
+        }
+
+        /* 标题是唯一可聚焦的入口（键盘用户按 Tab 就能走到），整卡点击是鼠标的顺带便利。
+           详情不再是独立页面，所以这里不再 target=_blank 外跳。 */
+        document.getElementById('articleContainer').addEventListener('click', e => {
+            if (e.target.closest('button') || e.target.closest('a')) return;
+            const card = e.target.closest('.article-card');
+            if (card) openDrawer(Number(card.dataset.id));
+        });
+
+        function openDrawerFromClick(ev, id) {
+            if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+            openDrawer(id);
+            return false;
+        }
+
+        /* ── 文章抽屉 ── */
+        function openDrawer(id) {
+            if (!id) return;
+            drawerArticleId = id;
+            const title = document.getElementById('drawerTitle');
+            const meta = document.getElementById('drawerMeta');
+            const body = document.getElementById('drawerBody');
+            const foot = document.getElementById('drawerFoot');
+            title.textContent = '加载中…';
+            meta.textContent = '';
+            body.innerHTML = '<div class="sk sk-line" style="width:80%"></div><div class="sk sk-line"></div><div class="sk sk-line short"></div>';
+            foot.innerHTML = '';
+            document.getElementById('drawerOverlay').classList.add('show');
+            const d = document.getElementById('articleDrawer');
+            d.classList.add('show');
+            d.setAttribute('aria-hidden', 'false');
+            const closeBtn = document.getElementById('drawerClose');
+            if (closeBtn) closeBtn.focus();
+            fetchDrawer(id);
+        }
+
+        function closeDrawer() {
+            if (drawerArticleId === null) return;
+            drawerArticleId = null;
+            document.getElementById('drawerOverlay').classList.remove('show');
+            const d = document.getElementById('articleDrawer');
+            d.classList.remove('show');
+            d.setAttribute('aria-hidden', 'true');
+        }
+
+        async function fetchDrawer(id) {
+            const title = document.getElementById('drawerTitle');
+            const meta = document.getElementById('drawerMeta');
+            const body = document.getElementById('drawerBody');
+            const foot = document.getElementById('drawerFoot');
+            try {
+                const resp = await apiFetch(`/api/v1/biz/articles/${id}`);
+                const a = await resp.json();
+                if (!resp.ok || a.error) throw new Error(a.error || '加载失败');
+                if (drawerArticleId !== id) return;  // 期间又点了别的文章
+                title.textContent = a.title || '无标题';
+                const srcName = a.ghName || a.ghID || '';
+                meta.innerHTML = (srcName ? `<span class="meta-src">${esc(srcName)}</span><span class="meta-sep">·</span>` : '')
+                    + `<span>${esc(formatDateTime(a.publishedAt))}</span>`;
+                const desc = a.description || a.Desc || '';
+                body.innerHTML = desc
+                    ? esc(desc)
+                    : '<span class="drawer-hint">这篇文章没有抓到简介，点「打开原文」查看完整内容。</span>';
+                renderDrawerFoot(a);
+            } catch (err) {
+                title.textContent = '加载失败';
+                body.innerHTML = `<span class="drawer-hint">${esc(err.message || '加载失败')}</span>`;
+            }
+        }
+
+        function renderDrawerFoot(a) {
+            const on = !!(a.bookmarked || a.Bookmarked);
+            document.getElementById('drawerFoot').innerHTML = `
+                <button type="button" class="btn btn-sm" id="drawerBookmarkBtn" onclick="toggleDrawerBookmark(${a.id})" aria-pressed="${on ? 'true' : 'false'}">${on ? '★ 已收藏' : '☆ 收藏'}</button>
+                <button type="button" class="btn btn-sm" onclick="generateArticleSummary(${a.id}, this)">🤖 AI 摘要</button>
+                <button type="button" class="btn btn-sm" onclick="exportArticleMD(${a.id}, this)">📄 导出 MD</button>
+                ${a.url ? `<a class="btn btn-accent btn-sm grow" href="${esc(a.url)}" target="_blank" rel="noopener">打开原文</a>` : ''}`;
+        }
+
+        function renderDrawerBookmark(on) {
+            const btn = document.getElementById('drawerBookmarkBtn');
+            if (!btn) return;
+            btn.textContent = on ? '★ 已收藏' : '☆ 收藏';
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        }
+
+        function toggleDrawerBookmark(id) {
+            const btn = document.getElementById('drawerBookmarkBtn');
+            if (!btn) return;
+            // 复用列表卡片的切换逻辑，保证两处状态一致
+            const on = btn.getAttribute('aria-pressed') === 'true';
+            const card = document.querySelector(`.article-card[data-id="${id}"]`);
+            const cardBtn = card ? card.querySelector('.bookmark-btn') : null;
+            if (cardBtn) { toggleBookmark(cardBtn, null); return; }
+            // 该文章不在当前列表里（例如从收藏过滤进来的）：直接调接口
+            apiFetch(`/api/v1/biz/articles/${id}/bookmark`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bookmarked: !on })
+            }).then(r => r.json()).then(d => {
+                if (d && d.error) throw new Error(d.error);
+                renderDrawerBookmark(!on);
+                toast(!on ? '已收藏' : '已取消收藏');
+            }).catch(err => toast(err.message || '操作失败', 'error'));
+        }
+
+        /* ── AI 汇总浮层 ── */
+        function toggleAIPopover() {
+            if (aiPopoverOpen) closeAIPopover();
+            else openAIPopover();
+        }
+
+        function openAIPopover() {
+            const pop = document.getElementById('aiPopover');
+            pop.hidden = false;
+            aiPopoverOpen = true;
+            positionAIPopover();
+            document.getElementById('aiSummaryBtn').setAttribute('aria-expanded', 'true');
+            const ta = document.getElementById('instructionInput');
+            if (ta) ta.focus();
+        }
+
+        function closeAIPopover() {
+            if (!aiPopoverOpen) return;
+            aiPopoverOpen = false;
+            document.getElementById('aiPopover').hidden = true;
+            document.getElementById('aiSummaryBtn').setAttribute('aria-expanded', 'false');
+        }
+
+        // 浮层锚在按钮下方：视口右侧放不下就往左收，始终不出屏。
+        function positionAIPopover() {
+            const btn = document.getElementById('aiSummaryBtn');
+            const pop = document.getElementById('aiPopover');
+            if (!btn || !pop || pop.hidden) return;
+            const r = btn.getBoundingClientRect();
+            const w = pop.offsetWidth || 340;
+            const left = Math.max(12, Math.min(r.right + window.scrollX - w, window.scrollX + document.documentElement.clientWidth - w - 12));
+            pop.style.top = (r.bottom + window.scrollY + 8) + 'px';
+            pop.style.left = left + 'px';
+        }
+
+        window.addEventListener('resize', positionAIPopover);
+        window.addEventListener('scroll', () => { if (aiPopoverOpen) positionAIPopover(); });
+
+        document.addEventListener('click', e => {
+            if (!aiPopoverOpen) return;
+            if (e.target.closest('#aiPopover') || e.target.closest('#aiSummaryBtn')) return;
+            closeAIPopover();
+        });
+
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'Escape') return;
+            if (drawerArticleId !== null) { closeDrawer(); return; }
+            if (aiPopoverOpen) { closeAIPopover(); return; }
+            if (bookmarkOnly || selectedTag || q || selectedGHID) {
+                if (e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+                clearAllFilters();
+            }
+        });
+
+        async function generateSummary() {
+            const btn = document.getElementById('genSummaryBtn');
+            btn.disabled = true;
+            btn.innerHTML = `抓取中${SYNC_DOTS}`;
+            const phase = setTimeout(() => { if (btn.disabled) btn.innerHTML = `生成中${SYNC_DOTS}`; }, 2500);
+            try {
+                const payload = { days: aiPopoverDays.value };
+                const instr = (document.getElementById('instructionInput') || {}).value;
+                if (instr && instr.trim()) payload.instruction = instr.trim();
+                const resp = await apiFetch('/api/v1/biz/reports', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error) throw new Error(data.error || '生成失败');
+                const s = data.summary || data;
+                if (!s) throw new Error('返回内容为空');
+                if (!s.days) s.days = aiPopoverDays.value;
+                if (!BizHub.Report.hasStructured(s) && !s.content && !s.Content) throw new Error('返回内容为空');
+                // 报告正文只在报告页渲染（设计说明 §3.2），这里只给结论与去处。
+                const box = document.getElementById('popoverResult');
+                box.hidden = false;
+                box.innerHTML = `<span>已生成${s.articleCount ? '，覆盖 ' + s.articleCount + ' 篇' : ''}</span>`
+                    + '<a href="' + pageHref('/biz/reports') + '">查看报告 →</a>';
+                toast('报告已生成');
+            } catch (err) {
+                toast(err.message || '生成失败', 'error');
+            } finally {
+                clearTimeout(phase);
+                btn.disabled = false;
+                btn.textContent = '生成报告';
+            }
+        }
+
+        /* ── 看点卡片（仅动态模式） ──
+         * AI 汇总不可用时退化为本地 n-gram 关键词 —— 部署没配 LLM 时这页不该是空的。
+         */
+        const DIGEST_WINDOW = 7;
+        let digestLoading = false;
+
+        const STOPWORDS = new Set([
+            '的','了','是','在','和','与','等','为','于','以','从','到','上','下',
+            '一个','一些','我们','你们','他们','这个','那个','可以','应该','怎么',
+            '什么','不是','都是','一种','不','也','还','只','就','才','并','及','或'
+        ]);
+
+        function extractChineseChars(text) {
+            return String(text || '').match(/[\u4e00-\u9fff]/g) || [];
+        }
+        function generateNGrams(chars, n) {
+            const grams = [];
+            if (chars.length < n) return grams;
+            for (let i = 0; i + n <= chars.length; i++) {
+                let stop = false, gram = '';
+                for (let j = 0; j < n; j++) {
+                    const ch = chars[i + j];
+                    gram += ch;
+                    if (STOPWORDS.has(ch)) { stop = true; break; }
+                }
+                if (!stop) grams.push(gram);
+            }
+            return grams;
+        }
+        function computeKeywords(articles, topN) {
+            const counts = new Map();
+            for (const a of articles || []) {
+                const chars = extractChineseChars(a.title);
+                for (const g of generateNGrams(chars, 2).concat(generateNGrams(chars, 3))) {
+                    counts.set(g, (counts.get(g) || 0) + 1);
+                }
+            }
+            return Array.from(counts.entries())
+                .sort((x, y) => (y[1] - x[1]) || (x[0].length - y[0].length))
+                .slice(0, topN)
+                .map(([word, count]) => ({ word, count }));
+        }
+
+        function digestThemesHTML(themes) {
+            if (!Array.isArray(themes) || themes.length === 0) return '';
+            const items = themes.filter(t => t && (t.title || t.summary)).map(t => {
+                const count = typeof t.articleCount === 'number' ? t.articleCount : (Array.isArray(t.articles) ? t.articles.length : 0);
+                return `<div class="digest-theme-item">
+                    <div class="digest-theme-head">
+                        <span class="digest-theme-title">${esc(t.title || '')}</span>
+                        ${count > 0 ? `<span class="digest-theme-count">${count} 篇</span>` : ''}
+                    </div>
+                    ${t.summary ? `<div class="digest-theme-body">${esc(t.summary)}</div>` : ''}
+                </div>`;
+            }).join('');
+            return items ? `<div class="digest-themes">${items}</div>` : '';
+        }
+
+        function keywordChipsHTML(list) {
+            const chips = (list || []).slice(0, 12).map(k => {
+                const word = typeof k === 'string' ? k : (k && (k.word || k.text || k.name)) || '';
+                const count = typeof k === 'object' && k ? Number(k.count || k.hits || 0) : 0;
+                if (!word) return '';
+                return `<span class="keyword-chip" onclick="pickKeyword('${esc(word).replace(/'/g, "\\'")}')" title="${count > 0 ? count + ' 篇文章包含「' + esc(word) + '」' : esc(word)}">
+                    <span>${esc(word)}</span>${count > 0 ? `<span class="kw-count">${count}</span>` : ''}
+                </span>`;
+            }).filter(Boolean).join('');
+            return chips ? `<div class="digest-keywords">${chips}</div>` : '';
+        }
+
+        function digestHotTakesHTML(hotTakes) {
+            if (!Array.isArray(hotTakes)) return '';
+            const items = hotTakes.filter(t => typeof t === 'string' && t.trim()).slice(0, 5).map(t => `<li>${esc(t)}</li>`).join('');
+            if (!items) return '';
+            return `<div class="digest-hottakes">
+                <div class="digest-hottakes-label">热门观点</div>
+                <ol>${items}</ol>
+            </div>`;
+        }
+
+        function digestAgeText(ts) {
+            if (!ts) return '';
+            const ms = Date.now() - Number(ts) * (Number(ts) > 1e12 ? 1 : 1000);
+            if (!isFinite(ms) || ms < 0) return '';
+            const min = Math.floor(ms / 60000);
+            if (min < 1) return '刚刚';
+            if (min < 60) return `${min} 分钟前`;
+            const hr = Math.floor(min / 60);
+            if (hr < 24) return `${hr} 小时前`;
+            return `${Math.floor(hr / 24)} 天前`;
+        }
+
+        function renderDigest(d) {
+            const content = document.getElementById('digestContent');
+            const stats = document.getElementById('digestStats');
+            const parts = [];
+            const headline = d.headline || d.Headline;
+            if (headline) parts.push(`<div class="digest-headline">${esc(headline)}</div>`);
+            const themes = digestThemesHTML(d.themes || d.Themes);
+            const keywords = keywordChipsHTML(d.keywords || d.Keywords);
+            const middle = [themes, keywords].filter(Boolean).join('');
+            if (middle) parts.push(`<div class="digest-body">${middle}</div>`);
+            const hot = digestHotTakesHTML(d.hotTakes || d.HotTakes);
+            if (hot) parts.push(`<div class="digest-body">${hot}</div>`);
+            const age = digestAgeText(d.computedAt || d.createdAt || d.updatedAt);
+            const cached = d.fromCache === true || d.cached === true;
+            parts.push(`<div class="digest-foot">
+                <span><span class="digest-tag">${cached ? '缓存' : '最新'}</span> ${esc(age || '刚刚生成')} · ${DIGEST_WINDOW} 天窗口</span>
+            </div>`);
+            content.innerHTML = parts.join('');
+
+            const n = (typeof d.articleCount === 'number' && d.articleCount > 0) ? d.articleCount : allArticles.length;
+            stats.textContent = n > 0 ? `覆盖 ${n} 篇 · 近 ${DIGEST_WINDOW} 天` : `近 ${DIGEST_WINDOW} 天动态`;
+        }
+
+        function renderDigestFallback(reason) {
+            const content = document.getElementById('digestContent');
+            const stats = document.getElementById('digestStats');
+            const kws = computeKeywords(allArticles, 12);
+            stats.textContent = 'AI 汇总不可用，已切换到本地关键词';
+            content.innerHTML = kws.length
+                ? `<div class="digest-body">${keywordChipsHTML(kws)}</div>
+                   <div class="digest-foot"><span>${esc(reason || '')}</span></div>`
+                : `<div class="digest-note">AI 汇总暂不可用${reason ? '（' + esc(reason) + '）' : ''}，本地也没能从标题里抽出关键词。</div>`;
+        }
+
+        async function loadDigest(fresh) {
+            if (mode !== 'digest' || digestLoading) return;
+            digestLoading = true;
+            const content = document.getElementById('digestContent');
+            document.getElementById('digestStats').textContent = '加载中…';
+            content.innerHTML = `<div class="digest-skeleton">
+                <div class="digest-skeleton-row title"></div>
+                <div class="digest-skeleton-row"></div>
+                <div class="digest-skeleton-row short"></div>
+            </div>`;
+            try {
+                const url = `/api/v1/biz/feed/digest?window=${DIGEST_WINDOW}` + (fresh ? '&fresh=true' : '');
+                const resp = await apiFetch(url);
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+                const payload = data.summary || data.payload || data;
+                if (!payload || typeof payload !== 'object') throw new Error('返回内容为空');
+                renderDigest(payload);
+            } catch (err) {
+                renderDigestFallback(err.message || '加载失败');
+            } finally {
+                digestLoading = false;
+            }
+        }
+
+        function refreshDigest() {
+            const btn = document.getElementById('digestRefreshBtn');
+            if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+            loadDigest(true).finally(() => {
+                const b = document.getElementById('digestRefreshBtn');
+                if (b) { b.disabled = false; b.textContent = '刷新'; }
+            });
+        }
+
+        /* ── 同步 ── */
+        async function pollSyncStatus() {
+            const btn = document.getElementById('syncBtn');
+            const check = async () => {
+                try {
+                    const resp = await apiFetch('/api/v1/biz/status');
+                    const data = await resp.json();
+                    if (data.syncing) { setSyncing(btn, data); setTimeout(check, 2000); }
+                    else {
+                        btn.disabled = false;
+                        btn.textContent = '同步';
+                        await loadStream(0, true);
+                        if (mode === 'digest') loadDigest();
+                    }
+                } catch (err) { btn.disabled = false; btn.textContent = '同步'; }
+            };
+            check();
+        }
+
+        /* ── Init ── */
+        (async function() {
+            readURL();
+            document.getElementById('searchInput').value = q;
+            syncModeUI();
+            renderPopoverRangeSeg();
+            const goto = document.getElementById('gotoReportsLink');
+            if (goto) goto.setAttribute('href', pageHref('/biz/reports'));
+            syncURL();          // 把 URL 规范化（例如 ?mode=all 补回 token）
+            propagateAuthToken();
+            await loadStream(0, true);
+            window.scrollTo(0, scrollByMode[mode] || 0);
+            if (mode === 'digest') loadDigest();
+            try {
+                const r = await apiFetch('/api/v1/biz/status');
+                const d = await r.json();
+                if (d.syncing) {
+                    const btn = document.getElementById('syncBtn');
+                    btn.disabled = true;
+                    setSyncing(btn, d);
+                    pollSyncStatus();
+                }
+            } catch (err) {}
+        })();
+    </script>
+</body>
+</html>

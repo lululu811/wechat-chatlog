@@ -25,6 +25,8 @@ _聊天记录工具，帮助大家轻松使用自己的聊天数据_
 - 提供 HTTP API 服务，可轻松查询聊天记录、联系人、群聊、最近会话等信息
 - 支持 MCP Streamable HTTP 协议，可与 AI 助手无缝集成
 - 支持多账号管理，可在不同账号间切换
+- **公众号汇总（bizhub）**：本地解密 + 抓取公众号文章正文、生成结构化 AI 摘要、收藏与关注管理
+- **聊天记录统计**：`chatstat` 命令一键查看近期活跃 talker 与关键词
 
 ## Quick Start
 
@@ -34,7 +36,9 @@ _聊天记录工具，帮助大家轻松使用自己的聊天数据_
 2. **运行程序**：执行 `chatlog` 启动 Terminal UI 界面
 3. **解密数据**：选择 `解密数据` 菜单项
 4. **开启 HTTP 服务**：选择 `开启 HTTP 服务` 菜单项
-5. **访问数据**：通过 [HTTP API](#http-api) 或 [MCP 集成](#mcp-集成) 访问聊天记录
+5. **访问数据**：
+   - 通过 [HTTP API](#http-api) 或 [MCP 集成](#mcp-集成) 访问聊天记录
+   - 浏览器访问 `http://127.0.0.1:5030/biz` 查看公众号文章汇总（启用 bizhub 模块后）
 
 > 💡 **提示**: 如果电脑端微信聊天记录不全，可以[从手机端迁移数据](#从手机迁移聊天记录)  
 
@@ -88,7 +92,13 @@ chatlog decrypt
 
 # 启动 HTTP 服务
 chatlog server
+
+# 统计最近 N 天聊天活跃度排行（私聊/群聊 + 关键词 + 样本）
+chatlog chatstat --days 7 --top 20
 ```
+
+> 公众号归档不再有独立命令：在 Web 端「管理 → 批量任务」里一键导出。
+> 详见 [公众号归档功能说明](docs/biz2md.md)。
 
 ### Docker 部署
 
@@ -132,6 +142,29 @@ $ docker run -d \
   -v /path/to/your/wechat/data:/app/data \
   sjzar/chatlog:latest
 ```
+
+**3. 启用公众号汇总 / LLM 摘要（可选）**
+
+容器默认不开启公众号汇总与 LLM 摘要。如需启用，可在挂载目录写入 `chatlog-server.json`：
+
+```json
+{
+  "platform": "darwin",
+  "version": 4,
+  "http_addr": "0.0.0.0:5030",
+  "data_dir": "/app/data",
+  "data_key": "<已获取的 data_key>",
+  "work_dir": "/tmp/chatlog-decrypted",
+  "auto_decrypt": true,
+  "llm_base_url": "https://api.minimaxi.com/anthropic",
+  "llm_api_key": "sk-xxx",
+  "llm_model": "MiniMax-M3"
+}
+```
+
+重启容器后访问 `http://localhost:5030/biz`，即可看到公众号汇总页面（顶部 tab：公众号 / 关注动态 / 汇总 / 管理）。详细 LLM 配置见 [公众号汇总（bizhub）](#公众号汇总-bizhub)。
+
+> ⚠️ 建议将 `chatlog-server.json` 权限设为 `0600`，避免 LLM 密钥泄露。
 
 ### 从手机迁移聊天记录
 
@@ -197,6 +230,44 @@ GET /api/v1/chatlog?time=2023-01-01&talker=wxid_xxx
 - **联系人列表**：`GET /api/v1/contact`
 - **群聊列表**：`GET /api/v1/chatroom`
 - **会话列表**：`GET /api/v1/session`
+
+### 聊天记录统计
+
+```
+GET /api/v1/chatlog/stat?days=7&top=20
+```
+
+参数说明：
+- `days`: 统计最近 N 天（默认 7，最大 90）
+- `top`: 最多返回多少个 talker（默认 20，最大 100）
+- `limit`: 每个 talker 取多少条消息用于分析（默认 200，最大 1000）
+
+返回示例：
+
+```json
+{
+  "days": 7,
+  "totalMessages": 1622,
+  "talkerCount": 62,
+  "privateCount": 37,
+  "groupCount": 25,
+  "talkers": [
+    {
+      "rank": 1, "id": "wxid_xxx", "name": "Jett·夜宁",
+      "isChatRoom": false, "count": 200, "sent": 113, "received": 87,
+      "firstAt": 1757833443, "lastAt": 1758175443,
+      "topKeywords": ["晚安", "今天", "没有"],
+      "sampleTexts": ["不理我", "我去，我直接睡着了"]
+    }
+  ]
+}
+```
+
+也可使用 CLI 命令快速查看：
+
+```bash
+chatlog chatstat --days 7 --top 20
+```
 
 ### 多媒体内容
 
@@ -290,6 +361,83 @@ Body:
   "sender": "",
   "talker": "wxid_123"
 }
+```
+
+## 公众号汇总（bizhub）
+
+bizhub 模块把关注的公众号文章从微信本地数据库里解出来、抓正文、丢给 LLM 做结构化摘要，并提供 Web UI 进行统一管理。**所有数据本地处理，正文与文章入库到 `~/.chatlog/biz_articles.db`，不依赖任何远程服务**（除非开启 LLM 摘要）。
+
+### 启用
+
+在 `~/.chatlog/chatlog-server.json`（或通过环境变量）配置：
+
+```json
+{
+  "platform": "darwin",
+  "version": 4,
+  "data_dir": "/path/to/微信数据目录",
+  "data_key": "<data key>",
+  "work_dir": "/path/to/decrypted",
+  "auto_decrypt": true,
+  "llm_base_url": "https://api.minimaxi.com/anthropic",
+  "llm_api_key": "sk-xxx",
+  "llm_model": "MiniMax-M3",
+  "summary_fetch_content": true,
+  "summary_fetch_concurrency": 6
+}
+```
+
+启动 HTTP 服务（`chatlog server`）后，访问 `http://127.0.0.1:5030/biz` 即可看到。
+
+### 四个页面
+
+顶部 tab 导航统一指向四个页面：
+
+| 页面 | 用途 |
+|---|---|
+| `/biz` | 公众号文章浏览（按账号分组的文章流 + 搜索 + 同步 + 标签筛选） |
+| `/biz/feed` | 关注动态（默认 7 天，左侧 LLM 主题/关键词面板 + 文章收藏） |
+| `/biz/summary` | 汇总（生成结构化报告、当天「今日看点」 + 历史汇总） |
+| `/biz/admin` | 管理（账号显隐 / 星标关注 / 批量打标签 / 标签 CRUD） |
+
+### 关键功能
+
+- **结构化报告**：LLM 输出 `{summary, themes, mustReads, byAccount, highlights}`，前端独立渲染主题卡 / 必读评分 / 按公众号小段
+- **自定义指令**：每次生成可附加 prompt（如「只看 AI」「对比上次」「3 句话简报」），结果保存为不同 `summary_type` 记录
+- **抓正文 + 缓存**：并行抓取 mp.weixin.qq.com 文章正文（6 路并发、桌面 UA），写入 `biz_article_contents` 表（30 天内复用）
+- **图片与外链标注**：正文中的 `<img>` 转为 `[图片]` 占位 + `[图源：URL]`；`<a>` 文本后追加 `[link: URL]`，LLM 看到图片上下文与参考链接
+- **关注动态 LLM 汇总**：左侧面板由 LLM 实时生成「headline + themes + keywords + hotTakes」结构化摘要，4 小时缓存（可手动刷新绕过缓存）
+- **文章收藏**：每篇文章可单独 ☆/★ 收藏，`/biz/feed` 支持「只看收藏」过滤
+- **批量打标签**：管理页支持多选账号批量隐藏/关注/打标签
+
+### bizhub 关键 API
+
+```
+# 浏览文章
+GET /api/v1/biz/articles?ghid=xxx&limit=50
+
+# 关注动态文章流（默认 7 天）
+GET /api/v1/biz/feed?limit=50&days=7
+
+# 同步公众号（后台增量）
+POST /api/v1/biz/sync                    # 全量
+POST /api/v1/biz/sync { "ghid": "gh_xxx" }  # 单个
+
+# 关注 / 隐藏 账号
+POST /api/v1/biz/accounts/watch    { "ghIDs": [...], "watched": true }
+POST /api/v1/biz/accounts/visibility { "ghIDs": [...], "hidden": true }
+
+# 文章收藏
+POST /api/v1/biz/articles/:id/bookmark { "bookmarked": true }
+GET  /api/v1/biz/bookmarks?limit=50
+
+# LLM 汇总（结构化 JSON 输出）
+POST /api/v1/biz/summary         { "days": 7, "instruction": "只看 AI 算力" }
+GET  /api/v1/biz/summaries              # 历史报告列表
+GET  /api/v1/biz/summaries/:id         # 单份报告含结构化字段
+
+# 关注动态 LLM 摘要（4h 缓存，可 ?fresh=true 绕过）
+GET  /api/v1/biz/feed/summary?window=7&fresh=true
 ```
 
 ## MCP 集成

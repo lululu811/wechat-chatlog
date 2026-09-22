@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>报告 · 公众号</title>
+{{template "doc-head"}}
+    <style>
+
+        /* reports.html — 报告页页面专属样式（由 summary.html 改名而来）
+         *
+         * 设计说明 §3.2：汇总生成的唯一入口收敛到这一页，动态页只留一个跳转入口。
+           跨页共用的设计令牌、顶栏、导航、轻提示、报告卡片等已在
+           /biz/static/bizhub.css（源文件 internal/chatlog/bizhub/static/bizhub.css）。
+           公共样式表先加载，因此这里写同名规则即可就近覆盖。 */
+
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+
+        .btn {
+            padding: 7px 18px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: var(--font-sans);
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            letter-spacing: 0.01em;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-accent {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+        .btn-ghost { background: transparent; }
+        .btn-sm { padding: 5px 14px; font-size: 12px; }
+
+
+        /* ── Layout ── */
+        .layout {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 32px 40px 64px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        /* ── Page title ── */
+        .page-title {
+            font-family: var(--font-serif);
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: 0.01em;
+        }
+        .page-subtitle {
+            font-size: 13px;
+            color: var(--text-tertiary);
+            margin-top: 6px;
+            letter-spacing: 0.01em;
+        }
+
+        /* ── Generate card ── */
+        .generate-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+        .generate-head {
+            padding: 20px 28px 16px;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .generate-title {
+            font-family: var(--font-serif);
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: 0.01em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .generate-title::before {
+            content: '';
+            width: 3px;
+            height: 14px;
+            background: var(--accent);
+            border-radius: 2px;
+        }
+        .generate-body { padding: 20px 28px 24px; }
+        .generate-row {
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+        .generate-row + .generate-row { margin-top: 14px; }
+
+        .seg-control button {
+            padding: 7px 14px;
+            border: none;
+            background: transparent;
+            font-size: 12.5px;
+            font-family: var(--font-sans);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+            border-right: 1px solid var(--border-light);
+        }
+
+        .instruction-area {
+            flex: 1;
+            min-width: 280px;
+        }
+        .instruction-area textarea {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-size: 13px;
+            font-family: var(--font-sans);
+            line-height: 1.55;
+            color: var(--text);
+            background: var(--surface);
+            resize: vertical;
+            min-height: 70px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .instruction-area textarea:focus { border-color: var(--accent); }
+        .instruction-area textarea::placeholder { color: var(--text-tertiary); }
+        .instruction-hint {
+            font-size: 11.5px;
+            color: var(--text-tertiary);
+            margin-top: 6px;
+        }
+
+        .generate-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        /* ── Section title ── */
+        .section-title {
+            font-family: var(--font-serif);
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: 0.01em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .section-title::before {
+            content: '';
+            width: 3px;
+            height: 14px;
+            background: var(--accent);
+            border-radius: 2px;
+        }
+        .section-count {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            font-weight: 400;
+            font-family: var(--font-sans);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* ── Today card ── */
+        .today-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            animation: fadeUp 0.18s ease both;
+        }
+        .today-empty {
+            padding: 60px 28px;
+            text-align: center;
+            color: var(--text-tertiary);
+        }
+        .today-empty svg {
+            width: 52px;
+            height: 52px;
+            margin-bottom: 14px;
+            opacity: 0.5;
+        }
+        .today-empty p { font-size: 13.5px; margin-bottom: 16px; }
+
+        /* ── Summary report (structured) ── */
+        .report-card {
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            background: var(--bg);
+            overflow: hidden;
+            animation: fadeUp 0.25s ease both;
+        }
+        .report-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px 22px;
+            border-bottom: 1px solid var(--border-light);
+            background: var(--surface);
+        }
+        .report-body { padding: 4px 22px 22px; }
+        .report-body-fallback h2 { font-size: 16px; }
+
+
+        .theme-head {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-family: var(--font-sans);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            text-align: left;
+            transition: background 0.15s;
+        }
+
+        .must-read-item {
+            display: flex;
+            align-items: stretch;
+            gap: 12px;
+            padding: 12px 14px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            transition: border-color 0.15s;
+        }
+        .must-read-open {
+            align-self: center;
+            flex-shrink: 0;
+            text-decoration: none;
+        }
+
+        .by-account-block summary .chevron {
+            font-size: 10px;
+            color: var(--text-tertiary);
+            transition: transform 0.2s;
+        }
+
+
+        /* ── History list ── */
+        .history-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+        .history-item:first-child { border-top: none; }
+        .history-item-head {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 22px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-family: var(--font-sans);
+            font-size: 13.5px;
+            color: var(--text);
+            transition: background 0.15s;
+            text-align: left;
+            flex-wrap: wrap;
+        }
+        .history-item-date {
+            font-variant-numeric: tabular-nums;
+            color: var(--text);
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+        .history-item-instr {
+            font-size: 12px;
+            color: var(--accent);
+            font-family: var(--font-serif);
+            max-width: 280px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            background: var(--accent-bg);
+            padding: 2px 10px;
+            border-radius: 4px;
+            flex-shrink: 1;
+            min-width: 0;
+        }
+        .history-item-meta {
+            font-size: 11.5px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+            margin-left: auto;
+            flex-shrink: 0;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .history-item-meta span { white-space: nowrap; }
+        .history-item-meta .meta-num { color: var(--text-secondary); }
+        .history-item-chevron {
+            font-size: 10px;
+            color: var(--text-tertiary);
+            transition: transform 0.2s;
+            flex-shrink: 0;
+        }
+        .history-item.open .history-item-chevron { transform: rotate(90deg); }
+        .history-item.open .history-item-body { display: block; animation: fadeUp 0.2s ease both; }
+
+        .sk-line { height: 14px; width: 60%; }
+
+
+        @media (max-width: 768px) {
+            .layout { padding: 20px 16px 48px; gap: 18px; }
+            .generate-head, .generate-body { padding-left: 20px; padding-right: 20px; }
+            .report-head { padding: 12px 18px; }
+            .report-body { padding: 4px 18px 18px; }
+            .history-item-head { padding: 12px 18px; gap: 8px; }
+            .history-item-meta { margin-left: 0; width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>报告</h1>
+            <span class="header-stats" id="headerStats">AI 汇总报告的生成与查阅</span>
+        </div>
+        <div class="header-right"></div>
+    </div>
+
+{{template "top-nav" "reports"}}
+
+    <div class="layout">
+        <div>
+            <div class="page-title">报告</div>
+            <div class="page-subtitle">汇总生成的唯一入口：选时间窗、写下指令、生成，然后在这里查阅历史报告。</div>
+        </div>
+
+        <div class="generate-card">
+            <div class="generate-head">
+                <div class="generate-title">生成报告</div>
+            </div>
+            <div class="generate-body">
+                <div class="generate-row">
+                    <div class="seg-control" id="rangeSeg">
+                        <button data-days="1" class="active">今天</button>
+                        <button data-days="3">近3天</button>
+                        <button data-days="7">近一周</button>
+                    </div>
+                    <div class="instruction-area">
+                        <textarea id="instructionInput" rows="3" placeholder="可选：自定义指令。例如：只看 AI 与产品创新；给我 3 句话简报；对比上次报告的重点变化" aria-label="汇总自定义指令"></textarea>
+                        <div class="instruction-hint">不填则使用默认风格（总评 + 主题 + 重点阅读）。</div>
+                    </div>
+                </div>
+                <div class="generate-row">
+                    <div class="generate-actions" style="flex:1;">
+                        <button class="btn btn-accent" id="genSummaryBtn" onclick="generateSummary()" aria-label="生成报告">生成报告</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <section>
+            <div class="section-title">今日看点<span class="section-count" id="todayCount"></span></div>
+            <div class="today-card" id="todayCard">
+                <div class="today-empty">
+                    <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="8" y="10" width="32" height="28" rx="3"/>
+                        <path d="M16 18h16M16 24h12M16 30h16"/>
+                    </svg>
+                    <p id="todayEmptyText">今天还没有生成今日看点</p>
+                    <button class="btn btn-accent btn-sm" onclick="generateToday()">立即生成今日看点</button>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <div class="section-title">历史汇总<span class="section-count" id="historyCount"></span></div>
+            <div class="history-card" id="historyCard">
+                <div style="padding:14px 22px;"><div class="sk sk-line"></div></div>
+            </div>
+        </section>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/biz/static/bizhub.js"></script>
+    <script src="/biz/static/bizhub-report.js"></script>
+    <script>
+        let summaryRange = 1;
+
+        function esc(str) {
+            if (str === null || str === undefined) return '';
+            const d = document.createElement('div');
+            d.textContent = String(str);
+            return d.innerHTML;
+        }
+
+
+        function isToday(ts) {
+            if (!ts) return false;
+            const d = new Date(Number(ts) > 1e12 ? Number(ts) : Number(ts) * 1000);
+            if (isNaN(d.getTime())) return false;
+            const now = new Date();
+            return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+        }
+
+
+        document.getElementById('rangeSeg').addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn || btn.classList.contains('active')) return;
+            document.querySelectorAll('#rangeSeg button').forEach(b => b.classList.toggle('active', b === btn));
+            summaryRange = parseInt(btn.dataset.days, 10);
+        });
+
+        async function generateSummary() {
+            return doGenerate(summaryRange, document.getElementById('instructionInput').value, false);
+        }
+
+        async function generateToday() {
+            document.getElementById('rangeSeg').querySelectorAll('button').forEach(b => {
+                b.classList.toggle('active', b.dataset.days === '1');
+            });
+            summaryRange = 1;
+            return doGenerate(1, document.getElementById('instructionInput').value, true);
+        }
+
+        async function doGenerate(days, instruction, onlyToday) {
+            const btn = document.getElementById('genSummaryBtn');
+            btn.disabled = true;
+            btn.innerHTML = `抓取中${SYNC_DOTS}`;
+            let phaseTimer = setTimeout(() => {
+                if (btn.disabled) btn.innerHTML = `生成中${SYNC_DOTS}`;
+            }, 2500);
+            try {
+                const payload = { days: days };
+                if (instruction && instruction.trim()) payload.instruction = instruction.trim();
+                const resp = await apiFetch('/api/v1/biz/reports', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error) throw new Error(data.error || '生成失败');
+                const s = data.summary || data;
+                if (!s) throw new Error('返回内容为空');
+                if (!s.days) s.days = days;
+                if (!BizHub.Report.hasStructured(s) && !s.content && !s.Content) throw new Error('返回内容为空');
+                toast('汇总已生成');
+                await refreshAll(onlyToday);
+            } catch (err) {
+                toast(err.message || '生成失败', 'error');
+            } finally {
+                clearTimeout(phaseTimer);
+                btn.disabled = false;
+                btn.textContent = '生成报告';
+            }
+        }
+
+        function todayHighlight(s) {
+            const date = formatDate(s.createdAt || s.created_at) || '';
+            const range = rangeLabel(s.days || s.range);
+            const instruction = s.instruction || s.Instruction;
+            const instrHTML = instruction && instruction.trim()
+                ? `<div class="report-instruction">${esc(instruction)}</div>`
+                : '';
+            const st = BizHub.Report.getStructured(s);
+            let bodyHTML;
+            if (BizHub.Report.hasStructured(s)) {
+                bodyHTML = BizHub.Report.renderStructuredBody(st);
+            } else {
+                bodyHTML = BizHub.Report.renderFallbackBody(s.content || s.Content || '');
+            }
+            const metaHTML = BizHub.Report.renderMetaFooter(s);
+            return `<div class="report-card" data-id="${esc(s.id || '')}">
+                <div class="report-head">
+                    <div class="report-head-meta">
+                        <div class="report-date">${esc(date)}</div>
+                        ${instrHTML}
+                    </div>
+                    <div class="report-tags">
+                        <span class="report-range">${esc(range)}</span>
+                    </div>
+                </div>
+                ${bodyHTML}
+                ${metaHTML}
+            </div>`;
+        }
+
+        function renderToday(s) {
+            const card = document.getElementById('todayCard');
+            const count = document.getElementById('todayCount');
+            if (!s) {
+                card.innerHTML = `<div class="today-empty">
+                    <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="8" y="10" width="32" height="28" rx="3"/>
+                        <path d="M16 18h16M16 24h12M16 30h16"/>
+                    </svg>
+                    <p id="todayEmptyText">今天还没有生成今日看点</p>
+                    <button class="btn btn-accent btn-sm" onclick="generateToday()">立即生成今日看点</button>
+                </div>`;
+                count.textContent = '';
+                return;
+            }
+            card.innerHTML = todayHighlight(s);
+            count.textContent = `· ${formatDateTime(s.createdAt || s.created_at)}`;
+        }
+
+        function renderHistory(items) {
+            const card = document.getElementById('historyCard');
+            const count = document.getElementById('historyCount');
+            if (!items.length) {
+                card.innerHTML = '<div style="padding:24px 22px;font-size:13px;color:var(--text-tertiary);text-align:center;">暂无历史汇总</div>';
+                count.textContent = '';
+                return;
+            }
+            card.innerHTML = items.map(s => {
+                const date = formatDateTime(s.createdAt || s.created_at);
+                const instruction = s.instruction || s.Instruction || '';
+                const fetched = s.fetchedCount ?? s.FetchedCount;
+                const articleCount = s.articleCount ?? s.ArticleCount;
+                const tokIn = s.tokensIn ?? s.TokensIn;
+                const tokOut = s.tokensOut ?? s.TokensOut;
+                const tokens = (typeof tokIn === 'number' || typeof tokOut === 'number')
+                    ? `<span>tokens <span class="meta-num">${typeof tokIn === 'number' ? tokIn.toLocaleString() : '-'}/${typeof tokOut === 'number' ? tokOut.toLocaleString() : '-'}</span></span>`
+                    : '';
+                const fetchedHTML = typeof fetched === 'number'
+                    ? `<span>抓取 <span class="meta-num">${fetched}</span></span>`
+                    : (articleCount ? `<span><span class="meta-num">${articleCount}</span> 篇</span>` : '');
+                const range = rangeLabel(s.days || s.range);
+                const instrHTML = instruction.trim()
+                    ? `<span class="history-item-instr" title="${esc(instruction)}">${esc(instruction.length > 32 ? instruction.slice(0, 32) + '…' : instruction)}</span>`
+                    : '';
+                return `<div class="history-item" data-id="${s.id}">
+                    <button type="button" class="history-item-head" onclick="toggleHistoryItem(${s.id})">
+                        <span class="history-item-date">${esc(date)}</span>
+                        <span class="report-range">${esc(range)}</span>
+                        ${instrHTML}
+                        <span class="history-item-meta">
+                            ${fetchedHTML}
+                            ${tokens}
+                        </span>
+                        <span class="history-item-chevron">▶</span>
+                    </button>
+                    <div class="history-item-body" id="historyBody-${s.id}"></div>
+                </div>`;
+            }).join('');
+            count.textContent = `· ${items.length} 条`;
+        }
+
+        async function loadHistory() {
+            const card = document.getElementById('historyCard');
+            card.innerHTML = '<div style="padding:18px 22px;"><div class="sk sk-line" style="width:45%;margin-bottom:8px;"></div><div class="sk sk-line" style="width:60%;margin-bottom:0;"></div></div>';
+            try {
+                const resp = await apiFetch('/api/v1/biz/reports');
+                const data = await resp.json();
+                if (!resp.ok || data.error) throw new Error(data.error || '加载失败');
+                const items = data.items || [];
+                const today = items.find(s => isToday(s.createdAt || s.created_at));
+                const others = items.filter(s => !isToday(s.createdAt || s.created_at));
+                renderToday(today || null);
+                renderHistory(others);
+                if (items.length > 0) {
+                    document.getElementById('headerStats').textContent = `汇总 · 共 ${items.length} 条`;
+                }
+            } catch (err) {
+                card.innerHTML = `<div style="padding:18px 22px;font-size:13px;color:var(--text-tertiary);">${esc(err.message || '加载失败')}</div>`;
+                document.getElementById('todayCard').innerHTML = `<div class="today-empty"><p>${esc(err.message || '加载失败')}</p></div>`;
+            }
+        }
+
+        async function refreshAll(onlyToday) {
+            await loadHistory();
+        }
+
+        async function toggleHistoryItem(id) {
+            const item = document.querySelector(`.history-item[data-id="${id}"]`);
+            if (!item) return;
+            const body = document.getElementById(`historyBody-${id}`);
+            if (item.classList.contains('open')) {
+                item.classList.remove('open');
+                return;
+            }
+            item.classList.add('open');
+            if (body.dataset.loaded) return;
+            body.innerHTML = '<div style="padding:18px 22px;"><div class="sk sk-line" style="width:70%;margin-bottom:8px;"></div><div class="sk sk-line" style="width:90%;margin-bottom:0;"></div></div>';
+            try {
+                const resp = await apiFetch(`/api/v1/biz/reports/${id}`);
+                const data = await resp.json();
+                if (!resp.ok || data.error) throw new Error(data.error || '加载失败');
+                const s = data.summary || data;
+                if (BizHub.Report.hasStructured(s)) {
+                    body.innerHTML = BizHub.Report.renderStructuredBody(BizHub.Report.getStructured(s)) + BizHub.Report.renderMetaFooter(s);
+                } else {
+                    body.innerHTML = `<div class="report-body"><div class="report-body-fallback">${renderMarkdown(s.content || s.Content || '')}</div></div>` + BizHub.Report.renderMetaFooter(s);
+                }
+                body.dataset.loaded = '1';
+            } catch (err) {
+                body.innerHTML = `<p style="padding:18px 22px;color:var(--text-tertiary);">${esc(err.message || '加载失败')}</p>`;
+            }
+        }
+
+        loadHistory();
+    </script>
+</body>
+</html>

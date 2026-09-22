@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"github.com/sjzar/chatlog/internal/chatlog/bizhub"
 	"github.com/sjzar/chatlog/internal/chatlog/conf"
 	"github.com/sjzar/chatlog/internal/chatlog/ctx"
 	"github.com/sjzar/chatlog/internal/chatlog/database"
@@ -28,6 +29,7 @@ type Manager struct {
 	db     *database.Service
 	http   *http.Service
 	wechat *wechat.Service
+	bizhub *bizhub.Service
 
 	// Terminal UI
 	app *App
@@ -113,10 +115,68 @@ func (m *Manager) StartService() error {
 		go dat2img.ScanAndSetXorKey(m.ctx.DataDir)
 	}
 
+	// 初始化公众号汇总服务
+	m.initBizHub()
+
 	// 更新状态
 	m.ctx.SetHTTPEnabled(true)
 
 	return nil
+}
+
+// initBizHub 初始化公众号汇总服务
+func (m *Manager) initBizHub() {
+	db := m.db.GetDB()
+	if db == nil {
+		log.Warn().Msg("bizhub: database not ready, skipping")
+		return
+	}
+
+	workDir := m.ctx.WorkDir
+	if workDir == "" {
+		log.Warn().Msg("bizhub: workDir is empty, skipping")
+		return
+	}
+
+	bh, err := bizhub.NewService(db, workDir)
+	if err != nil {
+		log.Error().Err(err).Msg("bizhub: init failed")
+		return
+	}
+
+	bh.SetConfig(m.ctx)
+
+	m.bizhub = bh
+	m.http.SetBizHub(bh)
+	bh.Start()
+	log.Info().Msg("bizhub: initialized and sync started")
+}
+
+// initBizHubServer 初始化公众号汇总服务（server 模式）
+func (m *Manager) initBizHubServer(workDir string) {
+	db := m.db.GetDB()
+	if db == nil {
+		log.Warn().Msg("bizhub: database not ready, skipping")
+		return
+	}
+
+	if workDir == "" {
+		log.Warn().Msg("bizhub: workDir is empty, skipping")
+		return
+	}
+
+	bh, err := bizhub.NewService(db, workDir)
+	if err != nil {
+		log.Error().Err(err).Msg("bizhub: init failed")
+		return
+	}
+
+	bh.SetConfig(m.sc)
+
+	m.bizhub = bh
+	m.http.SetBizHub(bh)
+	bh.Start()
+	log.Info().Msg("bizhub: initialized and sync started")
 }
 
 func (m *Manager) StopService() error {
@@ -133,6 +193,14 @@ func (m *Manager) StopService() error {
 func (m *Manager) stopService() error {
 	// 按依赖的反序停止服务
 	var errs []error
+
+	if m.bizhub != nil {
+		if err := m.bizhub.Stop(); err != nil {
+			errs = append(errs, err)
+		}
+		m.bizhub = nil
+		m.http.SetBizHub(nil)
+	}
 
 	if err := m.http.Stop(); err != nil {
 		errs = append(errs, err)
@@ -358,7 +426,8 @@ func (m *Manager) CommandHTTPServer(configPath string, cmdConf map[string]any) e
 		go dat2img.ScanAndSetXorKey(dataDir)
 	}
 
-	log.Info().Msgf("server config: %+v", m.sc)
+	log.Info().Msgf("server config: type=%s platform=%s version=%d full_version=%s data_dir=%s work_dir=%s http_addr=%s auto_decrypt=%v",
+		m.sc.Type, m.sc.Platform, m.sc.Version, m.sc.FullVersion, m.sc.DataDir, m.sc.WorkDir, m.sc.GetHTTPAddr(), m.sc.AutoDecrypt)
 
 	m.wechat = wechat.NewService(m.sc)
 
@@ -401,6 +470,9 @@ func (m *Manager) CommandHTTPServer(configPath string, cmdConf map[string]any) e
 				return
 			}
 		}
+
+		// 初始化公众号汇总服务
+		m.initBizHubServer(workDir)
 	}()
 
 	return m.http.ListenAndServe()

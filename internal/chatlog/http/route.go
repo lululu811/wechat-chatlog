@@ -33,34 +33,63 @@ func (s *Service) initRouter() {
 
 func (s *Service) initBaseRouter() {
 	staticDir, _ := fs.Sub(EFS, "static")
+	staticFS := http.FS(staticDir)
 
-	s.router.StaticFS("/static", http.FS(staticDir))
-	s.router.StaticFileFS("/favicon.ico", "./favicon.ico", http.FS(staticDir))
-	s.router.StaticFileFS("/", "./index.htm", http.FS(staticDir))
+	// Use simple handlers instead of StaticFS/StaticFileFS to avoid concurrency issues
+	s.router.GET("/static/*filepath", func(c *gin.Context) {
+		filePath := c.Param("filepath")
+		if filePath == "" || filePath == "/" {
+			c.String(http.StatusNotFound, "Not found")
+			return
+		}
+		http.FileServer(staticFS).ServeHTTP(c.Writer, c.Request)
+	})
+
+	s.router.GET("/favicon.ico", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/")
+	})
+
+	s.router.GET("/", func(c *gin.Context) {
+		data, err := fs.ReadFile(staticDir, "index.htm")
+		if err != nil {
+			c.String(http.StatusNotFound, "Not found")
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+	})
 
 	s.router.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	s.router.NoRoute(s.NoRoute)
+	s.router.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/static") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+		} else {
+			c.Redirect(http.StatusFound, "/")
+		}
+	})
 }
 
 func (s *Service) initMediaRouter() {
-	s.router.GET("/image/*key", func(c *gin.Context) { s.handleMedia(c, "image") })
-	s.router.GET("/video/*key", func(c *gin.Context) { s.handleMedia(c, "video") })
-	s.router.GET("/file/*key", func(c *gin.Context) { s.handleMedia(c, "file") })
-	s.router.GET("/voice/*key", func(c *gin.Context) { s.handleMedia(c, "voice") })
-	s.router.GET("/data/*path", s.handleMediaData)
+	media := s.router.Group("", s.authMiddleware())
+	media.GET("/image/*key", func(c *gin.Context) { s.handleMedia(c, "image") })
+	media.GET("/video/*key", func(c *gin.Context) { s.handleMedia(c, "video") })
+	media.GET("/file/*key", func(c *gin.Context) { s.handleMedia(c, "file") })
+	media.GET("/voice/*key", func(c *gin.Context) { s.handleMedia(c, "voice") })
+	media.GET("/data/*path", s.handleMediaData)
 }
 
 func (s *Service) initAPIRouter() {
-	api := s.router.Group("/api/v1", s.checkDBStateMiddleware())
+	api := s.router.Group("/api/v1", s.authMiddleware(), s.checkDBStateMiddleware())
 	{
 		api.GET("/chatlog", s.handleChatlog)
 		api.GET("/contact", s.handleContacts)
 		api.GET("/chatroom", s.handleChatRooms)
 		api.GET("/session", s.handleSessions)
 		api.GET("/bizchatlog", s.handleBizChatlog)
+		api.GET("/chatlog/stat", s.handleChatStat)
 	}
 }
 
@@ -110,6 +139,7 @@ func (s *Service) handleChatlog(c *gin.Context) {
 	start, end, ok := util.TimeRangeOf(q.Time)
 	if !ok {
 		errors.Err(c, errors.InvalidArg("time"))
+		return
 	}
 	if q.Limit < 0 {
 		q.Limit = 0
@@ -297,10 +327,10 @@ func (s *Service) handleSessions(c *gin.Context) {
 func (s *Service) handleBizChatlog(c *gin.Context) {
 
 	q := struct {
-		Time    string `form:"time"`
-		GHID    string `form:"talker"`
-		Limit   int    `form:"limit"`
-		Format  string `form:"format"`
+		Time   string `form:"time"`
+		GHID   string `form:"talker"`
+		Limit  int    `form:"limit"`
+		Format string `form:"format"`
 	}{}
 
 	if err := c.BindQuery(&q); err != nil {
@@ -377,7 +407,13 @@ func (s *Service) handleMedia(c *gin.Context, _type string) {
 	var _err error
 	for _, k := range keys {
 		if strings.Contains(k, "/") {
-			if absolutePath, err := s.findPath(_type, k); err == nil {
+			absolutePath, err := s.findPath(_type, k)
+			if err != nil {
+				if errors.GetCode(err) == http.StatusBadRequest {
+					errors.Err(c, err)
+					return
+				}
+			} else {
 				c.Redirect(http.StatusFound, "/data/"+absolutePath)
 				return
 			}
@@ -407,8 +443,27 @@ func (s *Service) handleMedia(c *gin.Context, _type string) {
 	}
 }
 
+// absDataPath 将相对路径拼接为 dataDir 下的绝对路径，越出 dataDir 时返回 400 错误
+func (s *Service) absDataPath(rel string) (string, error) {
+	base, err := filepath.Abs(s.conf.GetDataDir())
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(filepath.Join(base, rel))
+	if err != nil {
+		return "", err
+	}
+	if abs != base && !strings.HasPrefix(abs, base+string(filepath.Separator)) {
+		return "", errors.InvalidArg("path")
+	}
+	return abs, nil
+}
+
 func (s *Service) findPath(_type string, key string) (string, error) {
-	absolutePath := filepath.Join(s.conf.GetDataDir(), key)
+	absolutePath, err := s.absDataPath(key)
+	if err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(absolutePath); err == nil {
 		return key, nil
 	}
@@ -432,7 +487,11 @@ func (s *Service) findPath(_type string, key string) (string, error) {
 func (s *Service) handleMediaData(c *gin.Context) {
 	relativePath := filepath.Clean(c.Param("path"))
 
-	absolutePath := filepath.Join(s.conf.GetDataDir(), relativePath)
+	absolutePath, err := s.absDataPath(relativePath)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
 
 	if _, err := os.Stat(absolutePath); os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{

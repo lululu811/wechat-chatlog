@@ -325,6 +325,35 @@
         color: var(--error-color);
         font-weight: bold;
       }
+
+      .biz-entry {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        background: var(--bg-white);
+        border: 1px solid var(--border-color);
+        border-left: 4px solid var(--success-color);
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 24px;
+      }
+
+      .biz-entry a {
+        color: var(--success-dark);
+        font-weight: 600;
+        font-size: 16px;
+        text-decoration: none;
+      }
+
+      .biz-entry a:hover {
+        text-decoration: underline;
+      }
+
+      .biz-entry span {
+        color: #666666;
+        font-size: 14px;
+      }
     </style>
   </head>
   <body>
@@ -335,6 +364,11 @@
           Chatlog 是一个帮助你轻松使用自己聊天数据的工具，现在你可以通过 HTTP
           API 访问你的聊天记录、联系人和群聊信息。
         </p>
+      </div>
+
+      <div class="biz-entry">
+        <a href="/biz">📚 公众号文章库 →</a>
+        <span>浏览、汇总、归档你关注的公众号文章</span>
       </div>
 
       <div class="api-section">

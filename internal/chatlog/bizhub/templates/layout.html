@@ -1,0 +1,35 @@
+{{/*
+    layout.html — 公众号模块公共版式片段
+
+    这个文件只放 {{define}}，本身不是一个可渲染的页面（不会被 ExecuteTemplate 调用），
+    被 templates/*.html 一起 ParseFS 进来，供各页 {{template ...}} 引用。
+
+    为什么要有它：导航原本在三个页面里各硬编码一份，外加各自一段按 pathname 回填
+    active 的脚本。四页收敛成三页后，「动态 / 报告 / 管理」这套导航已经是真正意义上的
+    一份数据，硬编码三遍的代价大于抽象成本；而且客户端回填 active 会有一次可见的
+    高亮闪烁，服务端直接给出正确状态更稳。
+
+    约定
+      1. 新增页面时改这里一处，各页只写 {{template "top-nav" "<key>"}}。
+      2. 页面 key 必须与 templates_test.go 的 tabKeys 一致。
+*/}}
+
+{{/* doc-head: 字体 + 公共样式表。各页紧跟 <title> 之后引用，
+     且必须排在页面 <style> 之前 —— 页面内联规则要能就近覆盖公共样式表。 */}}
+{{define "doc-head"}}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/biz/static/bizhub.css">
+{{end}}
+
+{{/* top-nav: 顶部导航。入参是当前页的 key（字符串），拿它决定哪一项高亮。
+     「chatlog」是回原生聊天记录页的出口，用 top-tab-spacer 推到最右。 */}}
+{{define "top-nav"}}
+    <nav class="top-tabs" aria-label="主导航">
+        <a class="top-tab{{if eq . "biz"}} active{{end}}" data-tab="biz" href="/biz">动态</a>
+        <a class="top-tab{{if eq . "reports"}} active{{end}}" data-tab="reports" href="/biz/reports">报告</a>
+        <a class="top-tab{{if eq . "admin"}} active{{end}}" data-tab="admin" href="/biz/admin">管理</a>
+        <span class="top-tab-spacer"></span>
+        <a class="top-tab" href="/" title="返回 chatlog 聊天记录页">chatlog</a>
+    </nav>
+{{end}}

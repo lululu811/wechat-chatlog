@@ -2,13 +2,18 @@ package http
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
+	"github.com/sjzar/chatlog/internal/chatlog/bizhub"
 	"github.com/sjzar/chatlog/internal/chatlog/database"
 	"github.com/sjzar/chatlog/internal/errors"
 )
@@ -23,11 +28,17 @@ type Service struct {
 	mcpServer           *server.MCPServer
 	mcpSSEServer        *server.SSEServer
 	mcpStreamableServer *server.StreamableHTTPServer
+
+	bizhub atomic.Pointer[bizhub.Service]
 }
 
 type Config interface {
 	GetHTTPAddr() string
 	GetDataDir() string
+	GetAuthToken() string
+	GetLLMBaseURL() string
+	GetLLMAPIKey() string
+	GetLLMModel() string
 }
 
 func NewService(conf Config, db *database.Service) *Service {
@@ -55,10 +66,21 @@ func NewService(conf Config, db *database.Service) *Service {
 
 	s.initMCPServer()
 	s.initRouter()
+
+	var llmClient *bizhub.LLMClient
+	if s.conf.GetLLMAPIKey() != "" {
+		llmClient = bizhub.NewLLMClient(s.conf.GetLLMBaseURL(), s.conf.GetLLMAPIKey(), s.conf.GetLLMModel())
+	}
+	bizhub.RegisterStatic(s.router, "/biz/static")
+	bizhub.RegisterRoutes(s.router.Group("", s.authMiddleware()), s.bizhub.Load, llmClient)
 	return s
 }
 
 func (s *Service) Start() error {
+
+	if err := s.checkAddrAuth(); err != nil {
+		return err
+	}
 
 	s.server = &http.Server{
 		Addr:    s.conf.GetHTTPAddr(),
@@ -78,6 +100,10 @@ func (s *Service) Start() error {
 }
 
 func (s *Service) ListenAndServe() error {
+
+	if err := s.checkAddrAuth(); err != nil {
+		return err
+	}
 
 	s.server = &http.Server{
 		Addr:    s.conf.GetHTTPAddr(),
@@ -109,4 +135,32 @@ func (s *Service) Stop() error {
 
 func (s *Service) GetRouter() *gin.Engine {
 	return s.router
+}
+
+// SetBizHub 设置公众号汇总服务，路由已在 NewService 中注册，handler 动态获取
+func (s *Service) SetBizHub(bh *bizhub.Service) {
+	s.bizhub.Store(bh)
+}
+
+// checkAddrAuth 绑定非 loopback 地址且未配置 auth token 时拒绝启动
+func (s *Service) checkAddrAuth() error {
+	addr := s.conf.GetHTTPAddr()
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if s.conf.GetAuthToken() == "" && !isLoopbackHost(host) {
+		err := fmt.Errorf("refusing to start HTTP server on non-loopback address %q without auth_token; set auth_token in config or bind to a loopback address", addr)
+		log.Error().Err(err).Msg("HTTP server start aborted")
+		return err
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }

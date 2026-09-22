@@ -10,6 +10,7 @@ var (
 	ErrKeyEmpty        = New(nil, http.StatusBadRequest, "key empty").WithStack()
 	ErrMediaNotFound   = New(nil, http.StatusNotFound, "media not found").WithStack()
 	ErrKeyLengthMust32 = New(nil, http.StatusBadRequest, "key length must be 32 bytes").WithStack()
+	ErrDBNotReady      = New(nil, http.StatusServiceUnavailable, "database is not ready").WithStack()
 )
 
 // 数据库初始化相关错误

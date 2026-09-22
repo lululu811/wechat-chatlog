@@ -30,7 +30,6 @@ go.work.sum
 *.db
 *.db-shm
 *.db-wal
-biz_archived.db
 
 # macOS
 .DS_Store
@@ -43,10 +42,7 @@ biz_archived.db
 *.swp
 *.swo
 
-# Node (Playwright bridge)
-scripts/biz2md-playwright/node_modules/
-
-# Python (clipper-sim + pytest cache)
+# Python caches
 __pycache__/
 *.pyc
 *.pyo

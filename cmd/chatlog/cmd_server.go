@@ -38,7 +38,14 @@ var serverCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 
 		cmdConf := getServerConfig()
-		log.Info().Msgf("server cmd config: %+v", cmdConf)
+		logConf := make(map[string]any, len(cmdConf))
+		for k, v := range cmdConf {
+			if k == "data_key" || k == "img_key" {
+				v = "***"
+			}
+			logConf[k] = v
+		}
+		log.Info().Msgf("server cmd config: %+v", logConf)
 
 		m := chatlog.New()
 		if err := m.CommandHTTPServer("", cmdConf); err != nil {

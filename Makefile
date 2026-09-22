@@ -19,7 +19,7 @@ UPX_PLATFORMS := \
 	linux/arm64 \
 	windows/amd64
 
-.PHONY: all clean lint tidy test test-pytest test-all build crossbuild upx biz2md-demo
+.PHONY: all clean lint tidy test build crossbuild upx
 
 all: clean lint tidy test build
 
@@ -38,28 +38,6 @@ tidy:
 test:
 	@echo "🧪 Running Go tests..."
 	$(GO) test ./... -cover
-
-# Runs Python unit tests for the biz2md clipper-sim integration tool.
-# Independent of `make test` because Python isn't a build dependency
-# of the Go binary — operators can opt-in via `make test-pytest`.
-test-pytest:
-	@echo "🐍 Running Python tests for scripts/biz2md-clipper-sim..."
-	@cd scripts/biz2md-clipper-sim && \
-	  (python3 -c "import zstandard" 2>/dev/null || python3 -m pip install --break-system-packages -q -r requirements.txt) && \
-	  (python3 -c "import pytest" 2>/dev/null || python3 -m pip install --break-system-packages -q pytest) && \
-	  pytest tests/ -v
-
-# Combined Go + Python test suite. Run this in CI.
-test-all: test test-pytest
-
-# One-shot demo: runs the clipper simulator end-to-end against a real
-# chatlog workDir and prints status. Use to validate the protocol
-# (URL list → md → vault → biz_archived) without installing the
-# Obsidian Web Clipper browser extension.
-biz2md-demo:
-	@echo "🎬 Running biz2md clipper-sim demo..."
-	@CHATLOG_TEST_WORK_DIR=$${CHATLOG_WORK_DIR:-/tmp/chatlog-decrypted} \
-	  python3 scripts/biz2md-clipper-sim/clipper_sim.py
 
 build:
 	@echo "🔨 Building for current platform..."

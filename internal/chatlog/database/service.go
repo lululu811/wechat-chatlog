@@ -2,12 +2,14 @@ package database
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/sjzar/chatlog/internal/chatlog/conf"
 	"github.com/sjzar/chatlog/internal/chatlog/webhook"
+	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/model"
 	"github.com/sjzar/chatlog/internal/wechatdb"
 )
@@ -20,8 +22,9 @@ const (
 )
 
 type Service struct {
-	State         int
-	StateMsg      string
+	mu            sync.RWMutex // 保护 state、stateMsg、db
+	state         int
+	stateMsg      string
 	conf          Config
 	db            *wechatdb.DB
 	webhook       *webhook.Service
@@ -48,17 +51,23 @@ func (s *Service) Start() error {
 		return err
 	}
 	s.SetReady()
+	s.mu.Lock()
 	s.db = db
+	s.mu.Unlock()
 	s.initWebhook()
 	return nil
 }
 
 func (s *Service) Stop() error {
-	if s.db != nil {
-		s.db.Close()
-	}
-	s.SetInit()
+	s.mu.Lock()
+	db := s.db
 	s.db = nil
+	s.state = StateInit
+	s.stateMsg = ""
+	s.mu.Unlock()
+	if db != nil {
+		db.Close()
+	}
 	if s.webhookCancel != nil {
 		s.webhookCancel()
 		s.webhookCancel = nil
@@ -67,57 +76,97 @@ func (s *Service) Stop() error {
 }
 
 func (s *Service) SetInit() {
-	s.State = StateInit
+	s.mu.Lock()
+	s.state = StateInit
+	s.mu.Unlock()
 }
 
 func (s *Service) SetDecrypting() {
-	s.State = StateDecrypting
+	s.mu.Lock()
+	s.state = StateDecrypting
+	s.mu.Unlock()
 }
 
 func (s *Service) SetReady() {
-	s.State = StateReady
+	s.mu.Lock()
+	s.state = StateReady
+	s.mu.Unlock()
 }
 
 func (s *Service) SetError(msg string) {
-	s.State = StateError
-	s.StateMsg = msg
+	s.mu.Lock()
+	s.state = StateError
+	s.stateMsg = msg
+	s.mu.Unlock()
+}
+
+func (s *Service) GetState() (int, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state, s.stateMsg
 }
 
 func (s *Service) GetDB() *wechatdb.DB {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.db
 }
 
 func (s *Service) GetMessages(start, end time.Time, talker string, sender string, keyword string, limit, offset int) ([]*model.Message, error) {
-	return s.db.GetMessages(start, end, talker, sender, keyword, limit, offset)
+	db := s.GetDB()
+	if db == nil {
+		return nil, errors.ErrDBNotReady
+	}
+	return db.GetMessages(start, end, talker, sender, keyword, limit, offset)
 }
 
 func (s *Service) GetContacts(key string, limit, offset int) (*wechatdb.GetContactsResp, error) {
-	return s.db.GetContacts(key, limit, offset)
+	db := s.GetDB()
+	if db == nil {
+		return nil, errors.ErrDBNotReady
+	}
+	return db.GetContacts(key, limit, offset)
 }
 
 func (s *Service) GetChatRooms(key string, limit, offset int) (*wechatdb.GetChatRoomsResp, error) {
-	return s.db.GetChatRooms(key, limit, offset)
+	db := s.GetDB()
+	if db == nil {
+		return nil, errors.ErrDBNotReady
+	}
+	return db.GetChatRooms(key, limit, offset)
 }
 
 // GetSession retrieves session information
 func (s *Service) GetSessions(key string, limit, offset int) (*wechatdb.GetSessionsResp, error) {
-	return s.db.GetSessions(key, limit, offset)
+	db := s.GetDB()
+	if db == nil {
+		return nil, errors.ErrDBNotReady
+	}
+	return db.GetSessions(key, limit, offset)
 }
 
 func (s *Service) GetMedia(_type string, key string) (*model.Media, error) {
-	return s.db.GetMedia(_type, key)
+	db := s.GetDB()
+	if db == nil {
+		return nil, errors.ErrDBNotReady
+	}
+	return db.GetMedia(_type, key)
 }
 
 func (s *Service) initWebhook() error {
 	if s.webhook == nil {
 		return nil
 	}
+	db := s.GetDB()
+	if db == nil {
+		return errors.ErrDBNotReady
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.webhookCancel = cancel
-	hooks := s.webhook.GetHooks(ctx, s.db)
+	hooks := s.webhook.GetHooks(ctx, db)
 	for _, hook := range hooks {
 		log.Info().Msgf("set callback %#v", hook)
-		if err := s.db.SetCallback(hook.Group(), hook.Callback); err != nil {
+		if err := db.SetCallback(hook.Group(), hook.Callback); err != nil {
 			log.Error().Err(err).Msgf("set callback %#v failed", hook)
 			return err
 		}
@@ -128,7 +177,13 @@ func (s *Service) initWebhook() error {
 // Close closes the database connection
 func (s *Service) Close() {
 	// Add cleanup code if needed
-	s.db.Close()
+	s.mu.Lock()
+	db := s.db
+	s.db = nil
+	s.mu.Unlock()
+	if db != nil {
+		db.Close()
+	}
 	if s.webhookCancel != nil {
 		s.webhookCancel()
 		s.webhookCancel = nil
@@ -136,5 +191,9 @@ func (s *Service) Close() {
 }
 
 func (s *Service) GetBizMessages(ctx context.Context, ghID string, start, end time.Time, limit int) ([]*model.BizMessage, error) {
-	return s.db.GetBizMessages(ctx, ghID, start, end, limit)
+	db := s.GetDB()
+	if db == nil {
+		return nil, errors.ErrDBNotReady
+	}
+	return db.GetBizMessages(ctx, ghID, start, end, limit)
 }

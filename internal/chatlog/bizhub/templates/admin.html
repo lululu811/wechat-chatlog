@@ -1,0 +1,1394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理 · 公众号</title>
+{{template "doc-head"}}
+    <style>
+
+        /* 本页只保留【页面专属】样式。
+           跨页共用的设计令牌、顶栏、导航、轻提示、报告卡片等已在
+           /biz/static/bizhub.css（源文件 internal/chatlog/bizhub/static/bizhub.css）。
+           公共样式表先加载，因此这里写同名规则即可就近覆盖。 */
+
+
+        .btn {
+            padding: 7px 18px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: var(--font-sans);
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            letter-spacing: 0.01em;
+        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-accent {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+        .btn-sm { padding: 5px 14px; font-size: 12px; }
+
+        /* ── Layout ── */
+        .layout {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 32px 40px 64px;
+        }
+
+        /* ── Toolbar ── */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .search-box {
+            display: flex;
+            align-items: center;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 12px;
+            width: 260px;
+            background: var(--surface);
+            transition: border-color 0.2s;
+        }
+
+        .seg-control button {
+            padding: 7px 16px;
+            border: none;
+            background: transparent;
+            font-size: 13px;
+            font-family: var(--font-sans);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+            border-right: 1px solid var(--border-light);
+        }
+
+        .tag-filter {
+            padding: 7px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--surface);
+            font-size: 13px;
+            font-family: var(--font-sans);
+            color: var(--text-secondary);
+            cursor: pointer;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .tag-filter:focus { border-color: var(--accent); }
+
+        /* ── Batch bar ── */
+        .batch-bar {
+            display: none;
+            position: sticky;
+            top: 56px;
+            z-index: 90;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            padding: 10px 20px;
+            margin-bottom: 16px;
+            align-items: center;
+            gap: 12px;
+        }
+        .batch-bar.show { display: flex; }
+        .batch-count {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+            margin-right: 8px;
+        }
+        .batch-count strong { color: var(--accent); font-weight: 600; }
+
+        /* ── Table card ── */
+        .main-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .table-wrap { overflow-x: auto; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 720px;
+        }
+        thead th {
+            text-align: left;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-tertiary);
+            letter-spacing: 0.03em;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg);
+            white-space: nowrap;
+        }
+        tbody td {
+            padding: 14px 16px;
+            font-size: 13.5px;
+            border-bottom: 1px solid var(--border-light);
+            vertical-align: middle;
+        }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr { transition: background 0.15s; }
+        tbody tr:hover { background: var(--hover); }
+        tbody tr.row-hidden { opacity: 0.5; }
+
+        .col-check { width: 36px; }
+        input[type="checkbox"].row-check,
+        input[type="checkbox"].head-check {
+            width: 15px;
+            height: 15px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .account-name {
+            font-size: 13.5px;
+            color: var(--text);
+            font-weight: 500;
+        }
+        .account-ghid {
+            font-size: 11.5px;
+            color: var(--text-tertiary);
+            margin-top: 1px;
+        }
+        .cell-tags {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .cell-tag {
+            font-size: 10.5px;
+            padding: 1px 8px;
+            border-radius: 100px;
+            color: #fff;
+            line-height: 1.5;
+            white-space: nowrap;
+        }
+        .cell-count {
+            font-variant-numeric: tabular-nums;
+            color: var(--text-secondary);
+        }
+        .cell-time {
+            font-variant-numeric: tabular-nums;
+            color: var(--text-tertiary);
+            font-size: 12.5px;
+            white-space: nowrap;
+        }
+
+        /* Toggle switch */
+        .toggle {
+            position: relative;
+            width: 36px;
+            height: 20px;
+            background: var(--border);
+            border-radius: 100px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border: none;
+            flex-shrink: 0;
+        }
+        .toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.2s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        }
+        .toggle.on { background: var(--accent); }
+        .toggle.on::after { transform: translateX(16px); }
+        .toggle:disabled { cursor: wait; opacity: 0.6; }
+
+        /* Watch star & chip */
+        .watch-star {
+            background: none;
+            border: none;
+            font-size: 15px;
+            line-height: 1;
+            cursor: pointer;
+            color: var(--border);
+            padding: 2px 4px;
+            transition: color 0.15s;
+        }
+        .watch-star:hover { color: var(--text-tertiary); }
+        .watch-star.on { color: var(--accent); }
+        .watch-star.on:hover { color: var(--accent-hover); }
+        .watch-star:disabled { cursor: wait; opacity: 0.6; }
+        .name-star {
+            color: var(--accent);
+            font-size: 11px;
+            margin-right: 4px;
+        }
+        .watch-chip {
+            padding: 7px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--surface);
+            font-size: 13px;
+            font-family: var(--font-sans);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .watch-chip.active {
+            background: var(--accent-bg);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* Empty & Skeleton */
+        .empty-state {
+            padding: 80px 28px;
+            text-align: center;
+            color: var(--text-tertiary);
+        }
+        .skeleton-row td { padding: 18px 16px; }
+        .skeleton {
+            height: 14px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, var(--border-light) 25%, var(--hover) 50%, var(--border-light) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.3s infinite;
+        }
+
+        .modal {
+            background: var(--surface);
+            border-radius: 10px;
+            padding: 28px;
+            max-width: 460px;
+            width: 90%;
+            max-height: 76vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.12);
+        }
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .tag-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-light);
+            gap: 8px;
+        }
+        .tag-row-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+        .tag-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .tag-row-name {
+            font-size: 14px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tag-row-count {
+            font-size: 11.5px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+            flex-shrink: 0;
+        }
+        .tag-row-actions {
+            display: flex;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+        .tag-action {
+            color: var(--text-tertiary);
+            cursor: pointer;
+            font-size: 12px;
+            transition: color 0.2s;
+            background: none;
+            border: none;
+            font-family: var(--font-sans);
+        }
+        .tag-action:hover { color: var(--accent); }
+        .tag-action.danger:hover { color: #c0392b; }
+        .tag-edit-form {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            width: 100%;
+            padding: 4px 0;
+        }
+        .tag-edit-form input[type="text"] {
+            flex: 1;
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: var(--font-sans);
+            outline: none;
+            min-width: 0;
+        }
+        .tag-edit-form input[type="text"]:focus { border-color: var(--accent); }
+        .tag-edit-form input[type="color"] {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 2px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .tag-confirm-del {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            width: 100%;
+        }
+        .tag-confirm-del .tag-action { font-size: 12px; }
+
+        .add-tag-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-light);
+        }
+        .add-tag-row input[type="text"] {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: var(--font-sans);
+            outline: none;
+            transition: border-color 0.2s;
+            min-width: 0;
+        }
+        .add-tag-row input[type="text"]:focus { border-color: var(--accent); }
+        .add-tag-row input[type="color"] {
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 3px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        /* Assign-tags modal rows */
+        .assign-tag-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 9px 0;
+            border-bottom: 1px solid var(--border-light);
+            cursor: pointer;
+        }
+        .assign-tag-row:last-child { border-bottom: none; }
+        .assign-tag-row input[type="checkbox"] {
+            width: 15px;
+            height: 15px;
+            accent-color: var(--accent);
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .assign-tag-row .tag-row-name { font-size: 13.5px; }
+
+        /* ── 分区切换（设计说明 §3.3）──
+         * 这一页原本把「账号表格 / 标签管理 / MD 归档 / 摘要生成」四件事竖着堆成
+         * 一条长页面，滚到底才发现后面还有东西，批量导出的进度条也可能在视口外。
+         * 改成分区切换后一次只面对一件事，每个分区的操作条也不再互相挤。
+         *
+         * 为什么不用现成的 .seg-control：那套圆角分段控件的视觉语义是「筛选」
+         * （全部 / 显示中 / 已隐藏），这里是「切换视图」，两者不该长得一样 ——
+         * 下划线式分区切换和它同屏出现时不会混淆。
+         *
+         * 留在页面 <style> 不进公共层：只有管理页有分区。
+         */
+        .section-tabs {
+            display: flex;
+            gap: 2px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+            overflow-x: auto;
+        }
+        .section-tab {
+            padding: 10px 18px;
+            border: none;
+            background: transparent;
+            font-family: var(--font-sans);
+            font-size: 14px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            white-space: nowrap;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .section-tab:hover { color: var(--text); }
+        .section-tab.active {
+            color: var(--accent);
+            font-weight: 600;
+            border-bottom-color: var(--accent);
+        }
+        .section-tab .cnt {
+            font-variant-numeric: tabular-nums;
+            font-size: 12px;
+            color: var(--text-tertiary);
+            margin-left: 6px;
+        }
+        .section-tab.active .cnt { color: var(--accent-soft); }
+
+        /* 分区容器：隐藏用 hidden 属性而不是 display:none 类名，
+         * 这样无障碍树里也只留下当前分区。 */
+        .admin-section[hidden] { display: none; }
+        .admin-section > .main-card + .main-card { margin-top: 24px; }
+        .section-body { padding: 22px 24px; }
+        .section-head { margin-bottom: 4px; }
+        .section-head h3 { margin: 0 0 6px 0; font-size: 16px; }
+        .section-head p {
+            margin: 0 0 16px 0;
+            font-size: 13px;
+            line-height: 1.65;
+            color: var(--text-secondary);
+        }
+
+        /* ── 批量任务 ── */
+        .task-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .task-row label { font-size: 13px; }
+        .task-row select,
+        .task-row input[type="number"] {
+            padding: 5px 9px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-family: var(--font-sans);
+            font-size: 13px;
+            background: var(--surface);
+            color: var(--text);
+        }
+        .task-row input[type="number"] { width: 74px; }
+        .progress-track {
+            background: var(--border);
+            border-radius: 4px;
+            height: 8px;
+            overflow: hidden;
+        }
+        .progress-bar {
+            background: var(--accent);
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .task-progress { margin-top: 14px; }
+        .task-result { margin-top: 14px; }
+        .task-status { font-size: 13px; color: var(--text-tertiary); margin-bottom: 14px; }
+
+        @media (max-width: 768px) {
+            .layout { padding: 20px 16px 48px; }
+            .toolbar { gap: 10px; }
+            .search-box { width: 100%; }
+            .batch-bar { padding: 10px 14px; flex-wrap: wrap; }
+            .col-tags, .col-count, .col-watch { display: none; }
+            table { min-width: 480px; }
+            .section-tabs { margin-bottom: 18px; }
+            .section-tab { padding: 9px 13px; font-size: 13.5px; }
+            .section-body { padding: 18px 16px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>管理</h1>
+        </div>
+    </div>
+
+{{template "top-nav" "admin"}}
+
+    <div class="layout">
+        <!-- 三个分区：账号 / 标签 / 批量任务。一次只显示一个。 -->
+        <div class="section-tabs" role="tablist" aria-label="管理分区">
+            <button type="button" role="tab" id="tab-accounts" aria-controls="section-accounts"
+                    class="section-tab active" data-section="accounts" onclick="switchSection('accounts')">
+                账号<span class="cnt" id="cntAccounts"></span>
+            </button>
+            <button type="button" role="tab" id="tab-tags" aria-controls="section-tags"
+                    class="section-tab" data-section="tags" onclick="switchSection('tags')">
+                标签<span class="cnt" id="cntTags"></span>
+            </button>
+            <button type="button" role="tab" id="tab-tasks" aria-controls="section-tasks"
+                    class="section-tab" data-section="tasks" onclick="switchSection('tasks')">
+                批量任务
+            </button>
+        </div>
+
+        <!-- ── 分区 1 · 账号 ── -->
+        <section class="admin-section" id="section-accounts" role="tabpanel" aria-labelledby="tab-accounts">
+        <div class="toolbar">
+            <div class="search-box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                </svg>
+                <input type="text" id="searchInput" placeholder="搜索公众号名称或 ID…" />
+            </div>
+            <div class="seg-control" id="visSeg">
+                <button data-filter="all" class="active">全部</button>
+                <button data-filter="visible">显示中</button>
+                <button data-filter="hidden">已隐藏</button>
+            </div>
+            <button class="watch-chip" id="watchChip">★ 仅关注</button>
+            <select class="tag-filter" id="tagFilter">
+                <option value="">全部标签</option>
+            </select>
+        </div>
+
+        <div class="batch-bar" id="batchBar">
+            <span class="batch-count">已选 <strong id="batchCount">0</strong> 个</span>
+            <button class="btn btn-sm" onclick="batchSetVisibility(true)">隐藏</button>
+            <button class="btn btn-sm" onclick="batchSetVisibility(false)">显示</button>
+            <button class="btn btn-sm" onclick="batchSetWatch(true)">关注</button>
+            <button class="btn btn-sm" onclick="batchSetWatch(false)">取消关注</button>
+            <button class="btn btn-sm" onclick="showAssignModal()">追加标签</button>
+            <button class="btn btn-sm" onclick="clearSelection()">清除选择</button>
+        </div>
+
+        <div class="main-card">
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-check"><input type="checkbox" class="head-check" id="headCheck" /></th>
+                            <th>公众号</th>
+                            <th class="col-tags">标签</th>
+                            <th class="col-count">文章数</th>
+                            <th>更新时间</th>
+                            <th class="col-watch">关注</th>
+                            <th>显示</th>
+                        </tr>
+                    </thead>
+                    <tbody id="accountTbody">
+                    </tbody>
+                </table>
+            </div>
+            <div id="tableFooter"></div>
+        </div>
+        </section>
+
+        <!-- ── 分区 2 · 标签 ── -->
+        <section class="admin-section" id="section-tags" role="tabpanel" aria-labelledby="tab-tags" hidden>
+            <div class="main-card">
+                <div class="section-body">
+                    <div class="section-head">
+                        <h3>标签</h3>
+                        <p>
+                            标签用来给公众号分类，「动态」页可按标签筛选文章。
+                            删除标签只会解除它与公众号的关联，不会删除公众号或文章。
+                        </p>
+                    </div>
+                    <div id="tagListContainer"></div>
+                    <div class="add-tag-row">
+                        <input type="text" id="newTagName" placeholder="新标签名称" />
+                        <input type="color" id="newTagColor" value="#2d5a27" />
+                        <button class="btn btn-accent btn-sm" onclick="createTag()">添加</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── 分区 3 · 批量任务 ── -->
+        <section class="admin-section" id="section-tasks" role="tabpanel" aria-labelledby="tab-tasks" hidden>
+            <div class="main-card">
+                <div class="section-body">
+                    <div class="section-head">
+                        <h3>MD 归档</h3>
+                        <p>
+                            把公众号文章导出为本地 Markdown（含图片）到配置好的目录。
+                            已归档的文章会按导出记录跳过，可以安全重跑。
+                        </p>
+                    </div>
+                    <div class="task-status" id="exportStatus">加载中…</div>
+                    <div class="task-row">
+                        <label for="exportDays">时间范围</label>
+                        <select id="exportDays">
+                            <option value="7">近 7 天</option>
+                            <option value="30" selected>近 30 天</option>
+                            <option value="90">近 90 天</option>
+                            <option value="180">近 180 天</option>
+                        </select>
+                        <label for="exportLimit">数量上限</label>
+                        <input type="number" id="exportLimit" value="100" min="1" max="1000" />
+                        <button class="btn btn-accent" onclick="batchExportMD()" id="batchExportBtn">批量导出</button>
+                    </div>
+                    <div class="task-progress" id="exportProgress" style="display: none;">
+                        <div id="exportProgressText" style="font-size: 13px; margin-bottom: 6px;">导出中…</div>
+                        <div class="progress-track"><div class="progress-bar" id="exportProgressBar"></div></div>
+                    </div>
+                    <div class="task-result" id="exportResult" style="display: none;"></div>
+                </div>
+            </div>
+
+            <div class="main-card">
+                <div class="section-body">
+                    <div class="section-head">
+                        <h3>摘要生成</h3>
+                        <p>
+                            为已归档的 Markdown 调用 LLM 生成结构化摘要（写入 YAML frontmatter），
+                            供「报告」页汇总使用。每篇约 10–30 秒，会消耗 API 额度。
+                        </p>
+                    </div>
+                    <div class="task-row">
+                        <label for="summaryLimit">每次处理</label>
+                        <input type="number" id="summaryLimit" value="20" min="1" max="100" />
+                        <span style="font-size: 13px; color: var(--text-tertiary);">篇</span>
+                        <button class="btn btn-accent" onclick="batchGenerateSummaries()" id="batchSummaryBtn">批量生成摘要</button>
+                    </div>
+                    <div class="task-progress" id="summaryProgress" style="display: none;">
+                        <div id="summaryProgressText" style="font-size: 13px;">生成中…</div>
+                    </div>
+                    <div class="task-result" id="summaryResult" style="display: none;"></div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Assign tags modal -->
+    <div class="modal-overlay" id="assignModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>追加标签</h3>
+                <button class="modal-close" onclick="hideModal('assignModal')">&times;</button>
+            </div>
+            <p style="margin:0 16px 12px;font-size:12.5px;line-height:1.6;color:var(--text-tertiary)">
+                追加模式：保留这些公众号已有的分类，只增加选中的标签。
+            </p>
+            <div id="assignListContainer"></div>
+            <div class="modal-footer">
+                <button class="btn btn-sm" onclick="hideModal('assignModal')">取消</button>
+                <button class="btn btn-accent btn-sm" id="assignConfirmBtn" onclick="confirmAssignTags()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/biz/static/bizhub.js"></script>
+    <script>
+        const allTags = JSON.parse({{.TagsJSON}} || '[]');
+
+        let accounts = [];
+        let selected = new Set();
+        let keyword = '';
+        let visFilter = 'all';
+        let tagFilterId = '';
+        let watchOnly = false;
+        let loading = false;
+
+        const tbody = document.getElementById('accountTbody');
+        const footer = document.getElementById('tableFooter');
+
+        function esc(str) {
+            if (!str) return '';
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+
+        /* admin 页自己的接口包装：统一错误提示。网络层走公共的 apiFetch（带 token）。 */
+        async function api(url, options) {
+            const resp = await apiFetch(url, options);
+            if (!resp.ok) {
+                let msg = '请求失败';
+                try { const d = await resp.json(); if (d.error) msg = d.error; } catch (e) {}
+                throw new Error(msg);
+            }
+            return resp.json();
+        }
+
+        function formatTime(ts) {
+            if (!ts) return '—';
+            const d = new Date(ts * 1000);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+
+        function tagUsageCount(tagId) {
+            return accounts.filter(a => (a.tags || []).some(t => t.id === tagId)).length;
+        }
+
+        function renderTagFilter() {
+            const sel = document.getElementById('tagFilter');
+            const cur = tagFilterId;
+            sel.innerHTML = '<option value="">全部标签</option>' + allTags.map(t =>
+                `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+            sel.value = cur;
+        }
+
+        function renderSkeleton() {
+            tbody.innerHTML = Array.from({length: 5}).map(() =>
+                `<tr class="skeleton-row">
+                    <td class="col-check"></td>
+                    <td><div class="skeleton" style="width:60%"></div><div class="skeleton" style="width:40%;margin-top:6px"></div></td>
+                    <td class="col-tags"><div class="skeleton" style="width:70%"></div></td>
+                    <td class="col-count"><div class="skeleton" style="width:30px"></div></td>
+                    <td><div class="skeleton" style="width:80px"></div></td>
+                    <td class="col-watch"><div class="skeleton" style="width:16px"></div></td>
+                    <td><div class="skeleton" style="width:36px;height:20px;border-radius:100px"></div></td>
+                </tr>`).join('');
+            footer.innerHTML = '';
+        }
+
+        function filteredAccounts() {
+            return accounts.filter(a => {
+                if (keyword) {
+                    const kw = keyword.toLowerCase();
+                    const hit = (a.ghName || '').toLowerCase().includes(kw) || (a.ghID || '').toLowerCase().includes(kw);
+                    if (!hit) return false;
+                }
+                if (tagFilterId) {
+                    const tid = parseInt(tagFilterId);
+                    if (!(a.tags || []).some(t => t.id === tid)) return false;
+                }
+                if (watchOnly && !a.watched) return false;
+                return true;
+            });
+        }
+
+        function renderTable() {
+            const rows = filteredAccounts();
+            if (rows.length === 0) {
+                tbody.innerHTML = '';
+                footer.innerHTML = `<div class="empty-state"><p>${accounts.length === 0 ? '暂无公众号数据' : '没有匹配的公众号'}</p></div>`;
+                updateBatchBar();
+                return;
+            }
+            footer.innerHTML = '';
+            tbody.innerHTML = rows.map(a => {
+                const tags = (a.tags || []).map(t =>
+                    `<span class="cell-tag" style="background:${esc(t.color)}">${esc(t.name)}</span>`).join('');
+                return `<tr class="${a.hidden ? 'row-hidden' : ''}" data-ghid="${esc(a.ghID)}">
+                    <td class="col-check"><input type="checkbox" class="row-check" data-ghid="${esc(a.ghID)}" ${selected.has(a.ghID) ? 'checked' : ''} /></td>
+                    <td>
+                        <div class="account-name">${a.watched ? '<span class="name-star">★</span>' : ''}${esc(a.ghName) || esc(a.ghID)}</div>
+                        <div class="account-ghid">${esc(a.ghID)}</div>
+                    </td>
+                    <td class="col-tags"><div class="cell-tags">${tags}</div></td>
+                    <td class="col-count cell-count">${a.articleCount}</td>
+                    <td class="cell-time">${formatTime(a.updatedAt)}</td>
+                    <td class="col-watch"><button class="watch-star ${a.watched ? 'on' : ''}" data-ghid="${esc(a.ghID)}" title="${a.watched ? '取消关注' : '关注'}">${a.watched ? '★' : '☆'}</button></td>
+                    <td><button class="toggle ${a.hidden ? '' : 'on'}" data-ghid="${esc(a.ghID)}" title="${a.hidden ? '已隐藏' : '显示中'}"></button></td>
+                </tr>`;
+            }).join('');
+            updateHeadCheck();
+            updateBatchBar();
+        }
+
+        async function loadAccounts() {
+            loading = true;
+            renderSkeleton();
+            try {
+                const params = new URLSearchParams({ filter: visFilter });
+                const data = await api('/api/v1/biz/admin/accounts?' + params.toString());
+                accounts = data.items || [];
+            } catch (err) {
+                accounts = [];
+                toast(err.message, 'error');
+            }
+            loading = false;
+            renderTable();
+            updateTabCounts();
+        }
+
+        async function setVisibility(ghIDs, hidden) {
+            return api('/api/v1/biz/admin/accounts/visibility', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ghIDs, hidden})
+            });
+        }
+
+        async function setWatch(ghIDs, watched) {
+            return api('/api/v1/biz/admin/accounts/watch', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ghIDs, watched})
+            });
+        }
+
+        tbody.addEventListener('click', async (e) => {
+            const check = e.target.closest('.row-check');
+            if (check) {
+                check.checked ? selected.add(check.dataset.ghid) : selected.delete(check.dataset.ghid);
+                updateHeadCheck();
+                updateBatchBar();
+                return;
+            }
+            const star = e.target.closest('.watch-star');
+            if (star && !star.disabled) {
+                const ghid = star.dataset.ghid;
+                const acc = accounts.find(a => a.ghID === ghid);
+                if (!acc) return;
+                const prev = acc.watched;
+                acc.watched = !prev;
+                star.disabled = true;
+                renderTable();
+                try {
+                    await setWatch([ghid], acc.watched);
+                    toast(acc.watched ? '已关注' : '已取消关注');
+                } catch (err) {
+                    acc.watched = prev;
+                    renderTable();
+                    toast(err.message, 'error');
+                }
+                return;
+            }
+            const toggle = e.target.closest('.toggle');
+            if (toggle && !toggle.disabled) {
+                const ghid = toggle.dataset.ghid;
+                const acc = accounts.find(a => a.ghID === ghid);
+                if (!acc) return;
+                const prev = acc.hidden;
+                acc.hidden = !prev;
+                toggle.disabled = true;
+                renderTable();
+                try {
+                    await setVisibility([ghid], acc.hidden);
+                    toast(acc.hidden ? '已隐藏' : '已显示');
+                } catch (err) {
+                    acc.hidden = prev;
+                    renderTable();
+                    toast(err.message, 'error');
+                }
+                return;
+            }
+        });
+
+        document.getElementById('headCheck').addEventListener('change', (e) => {
+            const rows = filteredAccounts();
+            if (e.target.checked) rows.forEach(a => selected.add(a.ghID));
+            else rows.forEach(a => selected.delete(a.ghID));
+            renderTable();
+        });
+
+        function updateHeadCheck() {
+            const rows = filteredAccounts();
+            const head = document.getElementById('headCheck');
+            const sel = rows.filter(a => selected.has(a.ghID)).length;
+            head.checked = rows.length > 0 && sel === rows.length;
+            head.indeterminate = sel > 0 && sel < rows.length;
+        }
+
+        function updateBatchBar() {
+            const bar = document.getElementById('batchBar');
+            document.getElementById('batchCount').textContent = selected.size;
+            bar.classList.toggle('show', selected.size > 0);
+        }
+
+        function clearSelection() {
+            selected.clear();
+            renderTable();
+        }
+
+        async function batchSetVisibility(hidden) {
+            const ghIDs = Array.from(selected);
+            if (ghIDs.length === 0) return;
+            if (!confirm(`将把选中的 ${ghIDs.length} 个公众号改为「${hidden ? '隐藏' : '显示'}」。\n` +
+                (hidden ? '隐藏后这些公众号的文章不再出现在「全部」模式与搜索结果里。' : '显示后恢复出现在列表与搜索里。') +
+                '\n\n继续？')) return;
+            try {
+                await setVisibility(ghIDs, hidden);
+                accounts.forEach(a => { if (selected.has(a.ghID)) a.hidden = hidden; });
+                selected.clear();
+                renderTable();
+                toast(hidden ? '已批量隐藏' : '已批量显示');
+            } catch (err) {
+                toast(err.message, 'error');
+            }
+        }
+
+        async function batchSetWatch(watched) {
+            const ghIDs = Array.from(selected);
+            if (ghIDs.length === 0) return;
+            if (!confirm(`将把选中的 ${ghIDs.length} 个公众号改为「${watched ? '关注' : '取消关注'}」。\n` +
+                (watched ? '关注后它们的文章进入「动态」模式的文章流。' : '取消关注后它们的文章不再进入「动态」模式的文章流。') +
+                '\n\n继续？')) return;
+            try {
+                await setWatch(ghIDs, watched);
+                accounts.forEach(a => { if (selected.has(a.ghID)) a.watched = watched; });
+                selected.clear();
+                renderTable();
+                toast(watched ? '已批量关注' : '已批量取消关注');
+            } catch (err) {
+                toast(err.message, 'error');
+            }
+        }
+
+        let searchTimeout;
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                keyword = e.target.value.trim();
+                renderTable();
+            }, 200);
+        });
+
+        document.getElementById('visSeg').addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn || btn.classList.contains('active')) return;
+            document.querySelectorAll('#visSeg button').forEach(b => b.classList.toggle('active', b === btn));
+            visFilter = btn.dataset.filter;
+            selected.clear();
+            loadAccounts();
+        });
+
+        document.getElementById('watchChip').addEventListener('click', () => {
+            watchOnly = !watchOnly;
+            document.getElementById('watchChip').classList.toggle('active', watchOnly);
+            renderTable();
+        });
+
+        document.getElementById('tagFilter').addEventListener('change', (e) => {
+            tagFilterId = e.target.value;
+            renderTable();
+        });
+
+        // ── Assign tags ──
+        function showAssignModal() {
+            const c = document.getElementById('assignListContainer');
+            if (allTags.length === 0) {
+                c.innerHTML = '<p style="color:var(--text-tertiary);text-align:center;padding:20px 0;">暂无标签，请先在「标签」分区创建</p>';
+            } else {
+                const selAccounts = accounts.filter(a => selected.has(a.ghID));
+                const common = new Set();
+                if (selAccounts.length > 0) {
+                    (selAccounts[0].tags || []).forEach(t => {
+                        if (selAccounts.every(a => (a.tags || []).some(x => x.id === t.id))) common.add(t.id);
+                    });
+                }
+                c.innerHTML = allTags.map(t =>
+                    `<label class="assign-tag-row">
+                        <input type="checkbox" value="${t.id}" ${common.has(t.id) ? 'checked' : ''} />
+                        <span class="tag-dot" style="background:${esc(t.color)}"></span>
+                        <span class="tag-row-name">${esc(t.name)}</span>
+                    </label>`).join('');
+            }
+            document.getElementById('assignModal').classList.add('show');
+        }
+
+        async function confirmAssignTags() {
+            const tagIDs = Array.from(document.querySelectorAll('#assignListContainer input[type="checkbox"]:checked'))
+                .map(el => parseInt(el.value));
+            const ghIDs = Array.from(selected);
+            if (ghIDs.length === 0) { hideModal('assignModal'); return; }
+
+            // 二次确认要写清「影响范围 + 数量」（设计说明 §5）：
+            // 这里只列真正会被新增的标签 —— 选中账号已全部拥有的标签是空操作，
+            // 不列出来才不会让人以为「点了没反应」。
+            const selAccounts = accounts.filter(a => selected.has(a.ghID));
+            const toAdd = allTags.filter(t => tagIDs.indexOf(t.id) !== -1).filter(t =>
+                !selAccounts.every(a => (a.tags || []).some(x => x.id === t.id)));
+            if (toAdd.length === 0) {
+                hideModal('assignModal');
+                toast('选中的账号已全部拥有这些标签，没有需要新增的');
+                return;
+            }
+            const names = toAdd.map(t => '· ' + t.name).join('\n');
+            if (!confirm(`将为 ${ghIDs.length} 个公众号追加 ${toAdd.length} 个标签（原有标签保留）：\n\n${names}\n\n继续？`)) return;
+
+            const btn = document.getElementById('assignConfirmBtn');
+            btn.disabled = true;
+            try {
+                await api('/api/v1/biz/admin/accounts/tags', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ghIDs, tagIDs, mode: 'add'})
+                });
+                const picked = new Set(tagIDs);
+                const added = allTags.filter(t => picked.has(t.id));
+                accounts.forEach(a => {
+                    if (!selected.has(a.ghID)) return;
+                    // 追加语义：保留原有标签，与新选中的标签取并集
+                    const kept = a.tags.filter(t => !picked.has(t.id));
+                    a.tags = kept.concat(added);
+                });
+                hideModal('assignModal');
+                selected.clear();
+                renderTable();
+                toast('已为 ' + ghIDs.length + ' 个公众号追加标签');
+            } catch (err) {
+                toast(err.message, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // ── Tag management modal ──
+        let editingTagId = 0;
+        let deletingTagId = 0;
+
+        /* ── 分区切换（设计说明 §3.3）──
+         *
+         * 状态存 URL（?section=tags），和「动态」页的双模式同一套思路：
+         * 刷新后停在原来的分区，而不是弹回第一屏。这类后台页最容易丢的就是
+         * 「我正在改标签，一刷新回到了账号列表」。
+         */
+        const SECTIONS = ['accounts', 'tags', 'tasks'];
+
+        function sectionFromURL() {
+            const s = new URLSearchParams(location.search).get('section');
+            return SECTIONS.indexOf(s) >= 0 ? s : 'accounts';
+        }
+
+        // switchSection 切换分区。silent=true 时只改界面不动 history
+        // （popstate 回来时用，否则会自己压一层历史）。
+        function switchSection(key, silent) {
+            if (SECTIONS.indexOf(key) < 0) key = 'accounts';
+
+            SECTIONS.forEach(k => {
+                const tab = document.getElementById('tab-' + k);
+                const sec = document.getElementById('section-' + k);
+                const on = k === key;
+                if (tab) {
+                    tab.classList.toggle('active', on);
+                    tab.setAttribute('aria-selected', on ? 'true' : 'false');
+                }
+                if (sec) sec.hidden = !on;
+            });
+
+            // 离开标签分区时收起内联编辑/删除确认，免得回来时停在一个
+            // 半开启的删除确认上（用户已经忘了自己点过什么）
+            if (key !== 'tags') {
+                editingTagId = 0;
+                deletingTagId = 0;
+            }
+
+            if (!silent) {
+                const url = new URL(location.href);
+                if (key === 'accounts') url.searchParams.delete('section');
+                else url.searchParams.set('section', key);
+                history.pushState({ section: key }, '', url);
+            }
+        }
+
+        window.addEventListener('popstate', () => switchSection(sectionFromURL(), true));
+
+        // updateTabCounts 把两个列表的规模写到分区标签上，
+        // 这样不用切过去也知道标签区里有多少个标签。
+        function updateTabCounts() {
+            const ca = document.getElementById('cntAccounts');
+            if (ca) ca.textContent = accounts.length ? String(accounts.length) : '';
+            const ct = document.getElementById('cntTags');
+            if (ct) ct.textContent = allTags.length ? String(allTags.length) : '';
+        }
+
+        function hideModal(id) {
+            document.getElementById(id).classList.remove('show');
+        }
+
+        function renderTagList() {
+            const c = document.getElementById('tagListContainer');
+            if (allTags.length === 0) {
+                c.innerHTML = '<p style="color:var(--text-tertiary);text-align:center;padding:20px 0;">暂无标签</p>';
+                return;
+            }
+            c.innerHTML = allTags.map(t => {
+                if (editingTagId === t.id) {
+                    return `<div class="tag-row">
+                        <div class="tag-edit-form">
+                            <input type="color" id="editTagColor" value="${esc(t.color)}" />
+                            <input type="text" id="editTagName" value="${esc(t.name)}" />
+                            <button class="tag-action" onclick="saveTagEdit(${t.id})">保存</button>
+                            <button class="tag-action" onclick="cancelTagEdit()">取消</button>
+                        </div>
+                    </div>`;
+                }
+                if (deletingTagId === t.id) {
+                    const used = tagUsageCount(t.id);
+                    return `<div class="tag-row">
+                        <div class="tag-confirm-del">
+                            <span>
+                                确认删除「${esc(t.name)}」？
+                                ${used > 0
+                                    ? `该标签正被 <strong>${used}</strong> 个公众号使用，删除后会从它们身上一并去掉。`
+                                    : '当前没有任何公众号使用这个标签。'}
+                            </span>
+                            <button class="tag-action danger" onclick="confirmDeleteTag(${t.id})">删除</button>
+                            <button class="tag-action" onclick="cancelDeleteTag()">取消</button>
+                        </div>
+                    </div>`;
+                }
+                return `<div class="tag-row">
+                    <div class="tag-row-info">
+                        <span class="tag-dot" style="background:${esc(t.color)}"></span>
+                        <span class="tag-row-name">${esc(t.name)}</span>
+                        <span class="tag-row-count">${tagUsageCount(t.id)} 个公众号</span>
+                    </div>
+                    <div class="tag-row-actions">
+                        <button class="tag-action" onclick="startTagEdit(${t.id})">编辑</button>
+                        <button class="tag-action danger" onclick="startDeleteTag(${t.id})">删除</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function startTagEdit(id) { editingTagId = id; deletingTagId = 0; renderTagList(); }
+        function cancelTagEdit() { editingTagId = 0; renderTagList(); }
+        function startDeleteTag(id) { deletingTagId = id; editingTagId = 0; renderTagList(); }
+        function cancelDeleteTag() { deletingTagId = 0; renderTagList(); }
+
+        async function saveTagEdit(id) {
+            const name = document.getElementById('editTagName').value.trim();
+            const color = document.getElementById('editTagColor').value;
+            if (!name) { toast('标签名称不能为空', 'error'); return; }
+            try {
+                await api(`/api/v1/biz/tags/${id}`, {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name, color})
+                });
+                const tag = allTags.find(t => t.id === id);
+                if (tag) { tag.name = name; tag.color = color; }
+                accounts.forEach(a => (a.tags || []).forEach(t => {
+                    if (t.id === id) { t.name = name; t.color = color; }
+                }));
+                editingTagId = 0;
+                renderTagList();
+                renderTagFilter();
+                renderTable();
+                toast('标签已保存');
+            } catch (err) {
+                toast(err.message, 'error');
+            }
+        }
+
+        async function confirmDeleteTag(id) {
+            try {
+                await api(`/api/v1/biz/tags/${id}`, { method: 'DELETE' });
+                const idx = allTags.findIndex(t => t.id === id);
+                if (idx >= 0) allTags.splice(idx, 1);
+                accounts.forEach(a => { a.tags = (a.tags || []).filter(t => t.id !== id); });
+                if (tagFilterId === String(id)) tagFilterId = '';
+                deletingTagId = 0;
+                renderTagList();
+                renderTagFilter();
+                renderTable();
+                updateTabCounts();
+                toast('标签已删除');
+            } catch (err) {
+                toast(err.message, 'error');
+            }
+        }
+
+        async function createTag() {
+            const name = document.getElementById('newTagName').value.trim();
+            const color = document.getElementById('newTagColor').value;
+            if (!name) { toast('标签名称不能为空', 'error'); return; }
+            try {
+                const data = await api('/api/v1/biz/tags', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name, color})
+                });
+                const tag = (data && data.tag) ? data.tag : {id: (data && data.id) || Date.now(), name, color};
+                allTags.push(tag);
+                document.getElementById('newTagName').value = '';
+                renderTagList();
+                renderTagFilter();
+                updateTabCounts();
+                toast('标签已创建');
+            } catch (err) {
+                toast(err.message, 'error');
+            }
+        }
+
+        document.querySelectorAll('.modal-overlay').forEach(el => {
+            el.addEventListener('click', (e) => {
+                if (e.target === el) el.classList.remove('show');
+            });
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
+            }
+        });
+
+        renderTagFilter();
+        renderTagList();
+        updateTabCounts();
+        // 分区必须在首次渲染前定好，且不走 history —— 否则一进页面就压一层历史，
+        // 用户第一次按返回会留在原地而不是退出。
+        switchSection(sectionFromURL(), true);
+        loadAccounts();
+
+        // --- MD 导出 ---
+        async function loadExportStatus() {
+            try {
+                const resp = await apiFetch('/api/v1/biz/admin/export/status');
+                const data = await resp.json();
+                const el = document.getElementById('exportStatus');
+                if (!data.configured) {
+                    el.innerHTML = '<span style="color: #ef4444;">⚠ MD 导出未配置。请在 chatlog-server.json 中设置 md_export_script 和 md_export_dir</span>';
+                    document.getElementById('batchExportBtn').disabled = true;
+                    return;
+                }
+                el.innerHTML = `已导出 <strong>${data.exported}</strong> 篇 · 待导出 <strong>${data.pending}</strong> 篇（近 30 天）`;
+            } catch (e) {
+                document.getElementById('exportStatus').textContent = '加载状态失败';
+            }
+        }
+
+        async function batchExportMD() {
+            const days = parseInt(document.getElementById('exportDays').value);
+            const limit = parseInt(document.getElementById('exportLimit').value);
+            if (!confirm(`将把最近 ${days} 天内最多 ${limit} 篇未归档的文章导出为 Markdown 文件。\n` +
+                '这是批量写盘操作，中途不要关闭服务。\n\n继续？')) return;
+            const btn = document.getElementById('batchExportBtn');
+            const progress = document.getElementById('exportProgress');
+            const progressText = document.getElementById('exportProgressText');
+            const progressBar = document.getElementById('exportProgressBar');
+            const result = document.getElementById('exportResult');
+
+            btn.disabled = true;
+            btn.textContent = '导出中...';
+            progress.style.display = 'block';
+            result.style.display = 'none';
+            progressText.textContent = '正在导出，请稍候...';
+            progressBar.style.width = '30%';
+
+            try {
+                progressBar.style.width = '60%';
+                const resp = await apiFetch('/api/v1/biz/admin/export/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ days, limit })
+                });
+                const data = await resp.json();
+                progressBar.style.width = '100%';
+
+                if (!resp.ok) {
+                    result.style.display = 'block';
+                    result.innerHTML = `<span style="color: #ef4444;">导出失败：${data.error || '未知错误'}</span>`;
+                    btn.disabled = false;
+                    btn.textContent = '批量导出';
+                    return;
+                }
+
+                result.style.display = 'block';
+                let html = `<strong>导出完成</strong>（耗时 ${data.duration}）<br>`;
+                html += `总计 ${data.total} · 成功 ${data.success} · 跳过 ${data.skipped} · 失败 ${data.failed}<br>`;
+                if (data.details && data.details.length > 0) {
+                    html += '<details style="margin-top: 8px;"><summary style="cursor: pointer; font-size: 12px;">查看详情</summary><ul style="font-size: 12px; margin: 4px 0;">';
+                    data.details.forEach(d => {
+                        html += `<li>${esc(d.account || '')} / ${esc(d.title || '无标题')} (${d.duration})</li>`;
+                    });
+                    html += '</ul></details>';
+                }
+                if (data.errors && data.errors.length > 0) {
+                    html += '<details style="margin-top: 8px;"><summary style="cursor: pointer; font-size: 12px; color: #ef4444;">查看失败</summary><ul style="font-size: 12px; margin: 4px 0; color: #ef4444;">';
+                    data.errors.forEach(e => {
+                        html += `<li>${esc(e)}</li>`;
+                    });
+                    html += '</ul></details>';
+                }
+                result.innerHTML = html;
+
+                loadExportStatus();
+            } catch (e) {
+                result.style.display = 'block';
+                result.innerHTML = `<span style="color: #ef4444;">请求失败：${e.message}</span>`;
+            }
+
+            btn.disabled = false;
+            btn.textContent = '批量导出';
+            setTimeout(() => { progress.style.display = 'none'; progressBar.style.width = '0%'; }, 2000);
+        }
+
+        // 初始化
+        loadExportStatus();
+
+        // --- 批量生成摘要 ---
+        async function batchGenerateSummaries() {
+            const limit = parseInt(document.getElementById('summaryLimit').value);
+            if (!confirm(`将为最多 ${limit} 篇已归档但还没有摘要的文章调用 LLM 生成摘要。\n` +
+                '每篇约 10-30 秒，且会消耗 API 额度。\n\n继续？')) return;
+            const btn = document.getElementById('batchSummaryBtn');
+            const progress = document.getElementById('summaryProgress');
+            const progressText = document.getElementById('summaryProgressText');
+            const result = document.getElementById('summaryResult');
+
+            btn.disabled = true;
+            btn.textContent = '生成中...';
+            progress.style.display = 'block';
+            progressText.textContent = '正在调用 LLM 生成摘要，每篇约 10-30 秒...';
+            result.style.display = 'none';
+
+            try {
+                const resp = await apiFetch('/api/v1/biz/admin/batch/summary', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ limit })
+                });
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    result.style.display = 'block';
+                    result.innerHTML = `<span style="color: #ef4444;">生成失败：${data.error || '未知错误'}</span>`;
+                    btn.disabled = false;
+                    btn.textContent = '批量生成摘要';
+                    return;
+                }
+
+                result.style.display = 'block';
+                let html = `<strong>摘要生成完成</strong><br>`;
+                html += `成功 ${data.success} · 失败 ${data.failed} · 跳过 ${data.skipped}<br>`;
+                if (data.errors && data.errors.length > 0) {
+                    html += '<details style="margin-top: 8px;"><summary style="cursor: pointer; font-size: 12px; color: #ef4444;">查看失败详情</summary><ul style="font-size: 12px; margin: 4px 0; color: #ef4444;">';
+                    data.errors.forEach(e => {
+                        html += `<li>${esc(e)}</li>`;
+                    });
+                    html += '</ul></details>';
+                }
+                result.innerHTML = html;
+            } catch (e) {
+                result.style.display = 'block';
+                result.innerHTML = `<span style="color: #ef4444;">请求失败：${e.message}</span>`;
+            }
+
+            btn.disabled = false;
+            btn.textContent = '批量生成摘要';
+            setTimeout(() => { progress.style.display = 'none'; }, 2000);
+        }
+    </script>
+</body>
+</html>

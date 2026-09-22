@@ -181,6 +181,52 @@ func (c *Context) GetHTTPAddr() string {
 	return c.HTTPAddr
 }
 
+func (c *Context) GetAuthToken() string {
+	return c.conf.AuthToken
+}
+
+func (c *Context) GetLLMBaseURL() string {
+	return ""
+}
+
+func (c *Context) GetLLMAPIKey() string {
+	return ""
+}
+
+func (c *Context) GetLLMModel() string {
+	return ""
+}
+
+// GetLLMMaxTokens TUI Context 不持久化 LLM max_tokens，返回 0（调用方回退到默认 4096）
+func (c *Context) GetLLMMaxTokens() int {
+	return 0
+}
+
+// GetSummaryFetchContent TUI Context 不持久化 summary_fetch_content，返回 false
+func (c *Context) GetSummaryFetchContent() bool {
+	return false
+}
+
+// GetSummaryFetchConcurrency TUI Context 不持久化 summary_fetch_concurrency，返回 0（调用方回退到默认 6）
+func (c *Context) GetSummaryFetchConcurrency() int {
+	return 0
+}
+
+// GetFeedSummaryCacheHours TUI Context 不持久化 feed_summary_cache_hours，返回 0（调用方回退到默认 4）
+func (c *Context) GetFeedSummaryCacheHours() int {
+	return 0
+}
+
+// GetMDExportDir TUI Context 不持久化 md_export_dir，返回空字符串
+func (c *Context) GetMDExportDir() string {
+	return ""
+}
+
+// GetMDExportScript TUI Context 不持久化 md_export_script，返回空字符串
+func (c *Context) GetMDExportScript() string {
+	return ""
+}
+
 func (c *Context) GetWebhook() *conf.Webhook {
 	return c.conf.Webhook
 }
@@ -295,7 +341,7 @@ func (c *Context) UpdateConfig() {
 
 	if len(pconf.DataDir) != 0 {
 		if b, err := json.Marshal(pconf); err == nil {
-			if err := os.WriteFile(filepath.Join(pconf.DataDir, "chatlog.json"), b, 0644); err != nil {
+			if err := os.WriteFile(filepath.Join(pconf.DataDir, "chatlog.json"), b, 0600); err != nil {
 				log.Error().Err(err).Msg("save chatlog.json failed")
 			}
 		}
