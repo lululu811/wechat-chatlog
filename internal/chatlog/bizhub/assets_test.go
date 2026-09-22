@@ -31,8 +31,8 @@ const (
 	jsPath     = "static/bizhub.js"
 	reportPath = "static/bizhub-report.js"
 
-	cssLinkTag     = `<link rel="stylesheet" href="/biz/static/bizhub.css">`
-	baseScriptTag  = `<script src="/biz/static/bizhub.js"></script>`
+	cssLinkTag      = `<link rel="stylesheet" href="/biz/static/bizhub.css">`
+	baseScriptTag   = `<script src="/biz/static/bizhub.js"></script>`
 	reportScriptTag = `<script src="/biz/static/bizhub-report.js"></script>`
 )
 

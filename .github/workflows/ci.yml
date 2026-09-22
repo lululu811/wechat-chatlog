@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+# 为什么测试跑在 macOS 而不是 ubuntu：
+#
+#   1. 项目的官方支持矩阵是 Windows + macOS（见 AGENTS.md），Linux 只在 crossbuild 范围内，
+#      没有官方包 —— 在 Linux 上跑测试等于主要验证一条没人使用的代码路径；
+#   2. mattn/go-sqlite3 需要 CGO，macOS runner 自带 clang，开箱即用；Ubuntu 还得装
+#      gcc + libsqlite3-dev，Windows 需要 mingw 配置，都是额外的脆弱点；
+#   3. internal/wechat 下的密钥提取与内存扫描是平台相关的，只有 macOS 上才会真正编译到。
+#
+# 已知缺口：没有接 golangci-lint。`make lint` 同样依赖它，但本机未安装、
+# 也就没有基线可依 —— 直接挂上去大概率第一天就是红的，红灯挂久了等于没有检查。
+# 想接的话先本地跑一遍、把存量告警清干净或写成 baseline，再加到这个 workflow 里。
+
+jobs:
+  fmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: 检查 gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未按 gofmt 格式化，请本地执行 gofmt -w："
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt 通过"
+
+  test:
+    name: vet + test + build (macOS)
+    runs-on: macos-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go mod download
+        run: go mod download
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -cover
+
+      # 归档任务引入了 worker 池与并发降级，store 是共享状态。
+      # 只对并发相关的包单独跑一遍 -race，兼顾覆盖率与耗时。
+      - name: go test -race (bizhub)
+        run: go test -race ./internal/chatlog/bizhub/...
+
+      - name: go build
+        run: make build

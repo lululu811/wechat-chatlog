@@ -51,3 +51,10 @@ __pycache__/
 
 # Local backups (renamed by rm wrapper or manual move)
 .bak-*
+
+# Local tool state (assistant session data, project memory) - never versioned
+.workbuddy/
+.omc/
+
+# Generated reports / screenshots / prototype artifacts
+/output/

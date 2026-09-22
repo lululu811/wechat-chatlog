@@ -9,16 +9,16 @@ import (
 // BizMessage 公众号消息 (来自 biz_message_0.db, 4.x macOS 微信)
 // 每条公众号的每条推送对应 biz_message_0.db 里的 Msg_<md5(gh_id)> 表里的一行
 type BizMessage struct {
-	GHID        string    `json:"ghID"`        // 公众号 ID, 如 gh_a4a87df43a4c
-	GHName      string    `json:"ghName"`      // 公众号昵称 (来源 contact.db)
-	Time        time.Time `json:"time"`        // 发布时间
-	Title       string    `json:"title"`       // 标题
-	Desc        string    `json:"desc"`        // 摘要 / CDATA 内容
-	URL         string    `json:"url"`         // 原文链接
-	AppID       string    `json:"appId"`       // appmsg appid
-	LocalType   int64     `json:"localType"`   // 消息类型
-	LocalID     int64     `json:"localId"`     // 本地 ID
-	SortSeq     int64     `json:"sortSeq"`     // 排序序号
+	GHID      string    `json:"ghID"`      // 公众号 ID, 如 gh_a4a87df43a4c
+	GHName    string    `json:"ghName"`    // 公众号昵称 (来源 contact.db)
+	Time      time.Time `json:"time"`      // 发布时间
+	Title     string    `json:"title"`     // 标题
+	Desc      string    `json:"desc"`      // 摘要 / CDATA 内容
+	URL       string    `json:"url"`       // 原文链接
+	AppID     string    `json:"appId"`     // appmsg appid
+	LocalType int64     `json:"localType"` // 消息类型
+	LocalID   int64     `json:"localId"`   // 本地 ID
+	SortSeq   int64     `json:"sortSeq"`   // 排序序号
 }
 
 // PlainText 输出适合 MCP / 普通文本展示的紧凑格式
