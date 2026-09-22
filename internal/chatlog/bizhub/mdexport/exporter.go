@@ -276,6 +276,12 @@ func New(cfg Config) (*Exporter, error) {
 	return &Exporter{cfg: cfg}, nil
 }
 
+// exportWaitGrace 超时后留给管道关闭的宽限期。
+//
+// 超过这个时间就不等了：cmd.Wait() 在孙进程持有管道时会一直阻塞，
+// WaitDelay 到点后会直接关掉 I/O 管道强制它返回。
+const exportWaitGrace = 5 * time.Second
+
 // Export 执行单篇文章导出
 // url: 微信文章 URL
 func (e *Exporter) Export(ctx context.Context, url string) (*Result, error) {
@@ -319,6 +325,19 @@ func (e *Exporter) Export(ctx context.Context, url string) (*Result, error) {
 	var stderr, stdout bytes.Buffer
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stdout
+
+	// 超时必须真的能结束这次调用。
+	//
+	// CommandContext 只 kill 直接子进程（这里是 bash），而脚本会再拉起抓取器，
+	// 抓取器又拉起浏览器 —— 这些孙进程会继续持有 stdout/stderr 的写端。
+	// cmd.Wait() 要等管道关闭才返回，于是「超时」形同虚设：HTTP 请求一直挂着，
+	// 后台还攒下一堆抓到一半的浏览器进程。
+	//
+	// 两道保险：
+	//   WaitDelay  —— 上下文到期后再等一小会儿就强行关掉管道，保证 Wait 一定返回；
+	//   进程组 kill —— 把整棵树一起收掉，不留孤儿（仅 unix，见 procgroup_unix.go）。
+	cmd.WaitDelay = exportWaitGrace
+	setKillProcessGroup(cmd)
 
 	runErr := cmd.Run()
 	if runErr != nil {

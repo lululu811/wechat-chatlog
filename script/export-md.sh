@@ -79,6 +79,22 @@ if [ ! -w "$OUTPUT_DIR" ]; then
     exit 4
 fi
 
+# --- 依赖查找 ---
+#
+# uv tool install 的可执行文件落在 ~/.local/bin，但服务进程不一定继承得到这个目录：
+# 从启动台、launchd、定时任务或非交互 shell 启动的进程，PATH 常常只有系统默认值，
+# 于是抓取器明明已经装好，脚本却报依赖缺失（退出码 2）——
+# 用户看到的是「抓取器未安装」，实际是「进程的 PATH 里没有它」。
+# 这里显式把常见安装位置补进 PATH，让脚本不依赖调用方环境的完整性。
+# 追加（而不是前置）到 PATH 末尾：这些目录只是兜底，
+# 不能盖掉调用方 PATH 里已经存在的同名命令 —— 否则用户自己指定的版本会被悄悄替换。
+for d in "${HOME:-}/.local/bin" /usr/local/bin /opt/homebrew/bin; do
+    if [ -n "$d" ] && [ -d "$d" ]; then
+        PATH="$PATH:$d"
+    fi
+done
+export PATH
+
 if ! command -v wechat-article-to-markdown &>/dev/null; then
     echo "wechat-article-to-markdown not found in PATH" >&2
     echo "Install: pip install wechat-article-to-markdown" >&2
@@ -91,6 +107,12 @@ echo "[export-md] Output: $OUTPUT_DIR" >&2
 
 # --- 私有暂存目录 ---
 # 名字以 . 开头：调用方扫描输出目录时会跳过点目录，暂存中的文件不会被误认成产出。
+#
+# 顺手清掉过期的暂存目录：脚本被 SIGKILL 时 trap 不会执行（导出超时就是这么杀的），
+# 于是输出目录里会攒下一堆 .staging.XXXXXX。按 mtime 只删一小时以前的 ——
+# 单次导出最多跑 2 分钟（调用方超时 120s），所以不会误删正在用的暂存目录。
+find "$OUTPUT_DIR" -maxdepth 1 -type d -name '.staging.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+
 STAGE="$(mktemp -d "$OUTPUT_DIR/.staging.XXXXXX")" || {
     echo "Cannot create staging dir under: $OUTPUT_DIR" >&2
     exit 4

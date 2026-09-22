@@ -1,8 +1,10 @@
 package mdexport
 
 import (
+	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -338,5 +340,54 @@ func TestExportRejectsNonWechatURL(t *testing.T) {
 	}
 	if !KindOf(err).NeedsHuman() {
 		t.Error("链接不合法属于数据问题，重试无意义，应被判为需人工处理")
+	}
+}
+
+// TestScriptFindsCLIOutsidePATH 脚本必须自己找到抓取器，不能依赖调用方给的 PATH。
+//
+// 背景：抓取器是 uv tool install 装的，shim 落在 ~/.local/bin，
+// 而服务进程从非交互 shell / launchd / 定时任务启动时 PATH 里常常没有这个目录。
+// 结果是「明明装好了」却拿到退出码 2，被归类成「抓取器未安装」——
+// 用户会以为真没装，实际是进程环境不完整。
+// 这条测试故意把 ~/.local/bin 排除在 PATH 之外，验证脚本仍能找到它。
+func TestScriptFindsCLIOutsidePATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("导出脚本依赖 bash，Windows 上跳过")
+	}
+	script := scriptPath(t)
+
+	// 伪 HOME：抓取器装在这里，但故意不放进 PATH
+	home := t.TempDir()
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatalf("创建 %s: %v", localBin, err)
+	}
+	if err := os.WriteFile(filepath.Join(localBin, "wechat-article-to-markdown"), []byte(fakeCLI), 0o755); err != nil {
+		t.Fatalf("写入替身 CLI: %v", err)
+	}
+
+	// PATH 只给系统目录与一个空目录，明确不含 localBin
+	emptyBin := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", emptyBin+string(os.PathListSeparator)+"/usr/bin:/bin")
+
+	out := t.TempDir()
+	cmd := exec.Command("bash", script, "https://mp.weixin.qq.com/s/abcdef", "-o", out)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("脚本应自己找到 ~/.local/bin 下的抓取器，实际失败：%v\nstdout=%q\nstderr=%q",
+			err, stdout.String(), stderr.String())
+	}
+
+	line := strings.TrimSpace(stdout.String())
+	if !strings.HasPrefix(line, "MD_PATH=") {
+		t.Fatalf("stdout 应上报 MD_PATH，实际 %q", line)
+	}
+	// 替身 CLI 固定产出「甲号」这一级目录；命中它才能证明用的是 ~/.local/bin 里的那个，
+	// 而不是碰巧在某个系统目录里存在同名命令。
+	if !strings.Contains(line, "甲号") {
+		t.Errorf("MD_PATH 应来自 ~/.local/bin 下的替身 CLI（含「甲号」），实际 %q", line)
 	}
 }
