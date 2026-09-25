@@ -104,6 +104,10 @@ func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) 
 		route(api, http.MethodGet, "/status", "", withRecovery(handleStatus, getSvc))
 		route(api, http.MethodPost, "/articles/:id/bookmark", "",
 			withRecovery(handleToggleArticleBookmark, getSvc))
+		route(api, http.MethodPost, "/articles/:id/read", "",
+			withRecovery(handleMarkArticleRead, getSvc))
+		route(api, http.MethodPost, "/articles/mark-read", "",
+			withRecovery(handleBatchMarkRead, getSvc))
 
 		// 标签 API
 		route(api, http.MethodGet, "/tags", "", withRecovery(handleGetTags, getSvc))
@@ -122,6 +126,11 @@ func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) 
 		route(api, http.MethodGet, "/feed/digest", "/feed/summary", withRecovery(func(c *gin.Context, svc *Service) {
 			handleGetFeedDigest(c, svc, llm)
 		}, getSvc))
+		route(api, http.MethodGet, "/daily-digest", "", withRecovery(func(c *gin.Context, svc *Service) {
+			handleGetDailyDigest(c, svc, llm)
+		}, getSvc))
+		route(api, http.MethodGet, "/sectors", "", withRecovery(handleGetSectorDashboard, getSvc))
+		route(api, http.MethodGet, "/timeline", "", withRecovery(handleSearchTimeline, getSvc))
 
 		// 报告
 		route(api, http.MethodPost, "/reports", "/summary", withRecovery(func(c *gin.Context, svc *Service) {
@@ -169,9 +178,26 @@ func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) 
 		route(api, http.MethodGet, "/admin/export/status", "/export/status",
 			withRecovery(handleExportStatus, getSvc))
 
+		// IMA 推送任务（与 MD 归档镜像：admin/push/jobs）。
+		// 单篇推送已注册到 /articles/:id/push（见上），这里只挂批量任务的 5 条。
+		route(api, http.MethodPost, "/admin/push/jobs", "",
+			withRecovery(handleStartPushJob, getSvc))
+		route(api, http.MethodGet, "/admin/push/jobs", "",
+			withRecovery(handleListPushJobs, getSvc))
+		route(api, http.MethodGet, "/admin/push/jobs/:id", "",
+			withRecovery(handleGetPushJob, getSvc))
+		route(api, http.MethodPost, "/admin/push/jobs/:id/retry", "",
+			withRecovery(handleRetryPushJob, getSvc))
+		route(api, http.MethodPost, "/admin/push/jobs/:id/cancel", "",
+			withRecovery(handleCancelPushJob, getSvc))
+		route(api, http.MethodGet, "/admin/push/status", "",
+			withRecovery(handlePushStatus, getSvc))
+
 		// 单篇操作（未改名）
 		route(api, http.MethodPost, "/articles/:id/export", "",
 			withRecovery(handleExportArticle, getSvc))
+		route(api, http.MethodPost, "/articles/:id/push", "",
+			withRecovery(handlePushArticle, getSvc))
 		route(api, http.MethodPost, "/articles/:id/summary", "", withRecovery(func(c *gin.Context, svc *Service) {
 			handleGenerateArticleSummary(c, svc, llm)
 		}, getSvc))
@@ -180,6 +206,7 @@ func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) 
 	r.GET("/biz", withRecoveryPage(handleBizPage, getSvc))
 	r.GET("/biz/reports", withRecoveryPage(handleReportsPage, getSvc))
 	r.GET("/biz/admin", withRecoveryPage(handleAdminPage, getSvc))
+	r.GET("/biz/sectors", withRecoveryPage(handleSectorsPage, getSvc))
 
 	// 旧路由永久重定向，避免旧书签失效（设计说明 §6）。
 	// 用 301 而不是 302：这两个路径不会再回来，让浏览器/爬虫直接换掉书签。
@@ -324,8 +351,10 @@ func handleGetArticles(c *gin.Context, svc *Service) {
 
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	unreadOnly, _ := strconv.ParseBool(c.DefaultQuery("unread_only", "false"))
 
-	articles, err := svc.ListArticles(ghid, days, limit, offset)
+	filter := ArticleFilter{GHID: ghid, Days: days, Limit: limit, Offset: offset, UnreadOnly: unreadOnly}
+	articles, err := svc.ListArticlesWithFilter(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -335,9 +364,10 @@ func handleGetArticles(c *gin.Context, svc *Service) {
 	}
 	// ghid / days 仍在返回里回显：前端切模式时靠它确认后端真实生效的范围，
 	// 而不是只看自己发出去的参数。
-	resp := listResponse(articles, svc.CountListArticles(ghid, days), limit, offset)
+	resp := listResponse(articles, svc.CountListArticlesWithFilter(filter), limit, offset)
 	resp["ghid"] = ghid
 	resp["days"] = days
+	resp["unreadOnly"] = unreadOnly
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -811,6 +841,80 @@ func handleGetFeedDigest(c *gin.Context, svc *Service, llm *LLMClient) {
 	c.JSON(http.StatusOK, gin.H{"summary": summary})
 }
 
+// handleGetDailyDigest 获取每日精选（LLM 从 watched 账号文章里挑选）
+func handleGetDailyDigest(c *gin.Context, svc *Service, llm *LLMClient) {
+	fresh, _ := strconv.ParseBool(c.DefaultQuery("fresh", "false"))
+
+	digest, err := svc.GenerateDailyDigest(c.Request.Context(), llm, fresh)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrLLMNotConfigured):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrNoWatchedArticles):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrNotJSON):
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"digest": digest})
+}
+
+// handleGetSectorDashboard 板块看板：按标签聚合 watched 账号的近期文章热度
+func handleGetSectorDashboard(c *gin.Context, svc *Service) {
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "7"))
+	if days <= 0 {
+		days = 7
+	}
+	if days > 30 {
+		days = 30
+	}
+
+	sectors, err := svc.GetSectorDashboard(days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"sectors": sectors, "days": days})
+}
+
+// handleSearchTimeline 文章时间线：按关键词搜索 watched 账号文章，按时间排序
+func handleSearchTimeline(c *gin.Context, svc *Service) {
+	keyword := c.Query("keyword")
+	if keyword == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "keyword is required"})
+		return
+	}
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
+	if days <= 0 {
+		days = 30
+	}
+	if days > 365 {
+		days = 365
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	articles, total, err := svc.SearchTimeline(keyword, days, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"keyword": keyword,
+		"days":    days,
+		"total":   total,
+		"items":   articles,
+	})
+}
+
 // handleGenerateReport 同步生成关注公众号的文章汇总
 func handleGenerateReport(c *gin.Context, svc *Service, llm *LLMClient) {
 	var req SummaryRequest
@@ -901,6 +1005,14 @@ func handleReportsPage(c *gin.Context, svc *Service) {
 	}
 }
 
+// handleSectorsPage 板块看板页
+func handleSectorsPage(c *gin.Context, svc *Service) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.ExecuteTemplate(c.Writer, "sectors.html", nil); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+	}
+}
+
 // handleToggleArticleBookmark 切换单篇文章收藏状态
 func handleToggleArticleBookmark(c *gin.Context, svc *Service) {
 	idStr := c.Param("id")
@@ -926,6 +1038,57 @@ func handleToggleArticleBookmark(c *gin.Context, svc *Service) {
 		"id":         id,
 		"bookmarked": req.Bookmarked,
 	})
+}
+
+// handleMarkArticleRead 标记单篇文章已读/未读
+func handleMarkArticleRead(c *gin.Context, svc *Service) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	var req struct {
+		IsRead bool `json:"isRead"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	if err := svc.MarkArticleRead(id, req.IsRead); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":     id,
+		"isRead": req.IsRead,
+	})
+}
+
+// handleBatchMarkRead 批量标记已读。支持两种模式：
+//
+//	POST {ids: [1,2,3]}              — 按 ID 列表
+//	POST {ghid: "gh_xxx", days: 7}   — 按账号 + 时间范围
+//	POST {days: 7}                   — 全部账号最近 N 天
+func handleBatchMarkRead(c *gin.Context, svc *Service) {
+	var req struct {
+		IDs  []int64 `json:"ids"`
+		GHID string  `json:"ghid"`
+		Days int     `json:"days"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	affected, err := svc.BatchMarkRead(req.IDs, req.GHID, req.Days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"marked": affected})
 }
 
 // handleGetBookmarks 获取已收藏文章列表
@@ -960,6 +1123,57 @@ func handleExportArticle(c *gin.Context, svc *Service) {
 	}
 
 	result, err := svc.ExportArticle(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// --- IMA 推送 handlers ---
+
+// handlePushArticle 单篇推送。
+//
+// 链式校验：
+//   1. 必须先配置 IMA（skill_dir + kb_id）
+//   2. 文章必须已经 MD 归档成功（status IN 'exported','summary_generated'）
+//   否则返回 400 / 409。
+//
+// 400 / 409 都有明确的文案说明如何修复 —— 用户点了一个被禁用的按钮时，
+// 错误文案是仅有的反馈渠道。
+func handlePushArticle(c *gin.Context, svc *Service) {
+	if !svc.IsPushConfigured() {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "IMA push not configured. Set ima_push_skill_dir and ima_push_kb_id in config.",
+		})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid article id"})
+		return
+	}
+
+	// 链式前置校验：未 export 成功的不能 push。
+	//
+	// 这里单独拎出来，而不是塞到 PushArticle 里，是为了把校验失败的状态码
+	// 控制在 handler —— handler 决定 400 vs 409 vs 500，service 只返回语义。
+	exported, err := svc.IsArticleExported(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !exported {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "文章尚未归档成功，无法推送。请先执行 MD 归档。",
+		})
+		return
+	}
+
+	result, err := svc.PushArticle(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -1107,6 +1321,149 @@ func handleExportStatus(c *gin.Context, svc *Service) {
 	c.JSON(http.StatusOK, gin.H{
 		"configured": true,
 		"exported":   stats.Exported,
+		"pending":    stats.Pending,
+		"blocked":    stats.Blocked,
+		"days":       stats.Days,
+	})
+}
+
+// --- IMA 推送 任务 handlers ---
+//
+// 路径形态与 MD 归档对仗：admin/push/jobs 与 admin/push/jobs/:id。
+// 状态码语义也一致：202 = 任务已接受；404 = 任务不存在；409 = 已有任务在跑 / 任务在跑时拒绝重试。
+
+func handleStartPushJob(c *gin.Context, svc *Service) {
+	var req PushBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	job, err := svc.StartPushJob(req)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrPushNotConfigured):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrPushJobRunning):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrInvalidExportWindow):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{"job": job, "activeJobID": svc.ActivePushJob()})
+}
+
+func handleGetPushJob(c *gin.Context, svc *Service) {
+	id := c.Param("id")
+	withItems := c.DefaultQuery("items", "false") == "true"
+
+	job, items, err := svc.GetPushJob(id, withItems)
+	if err != nil {
+		if errors.Is(err, ErrPushJobNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if withItems && items == nil {
+		items = []PushJobItem{}
+	}
+
+	if !withItems {
+		job2, err := svc.store.GetPushJob(id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if job2 == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "推送任务不存在"})
+			return
+		}
+		job2.Succeeded = job.Succeeded
+		job2.Failed = job.Failed
+		job2.Skipped = job.Skipped
+		job2.Running = job.Running
+		job2.Pending = job.Pending
+		job = job2
+	}
+
+	resp := gin.H{"job": job, "activeJobID": svc.ActivePushJob(), "percent": job.Percent(), "processed": job.Processed()}
+	if withItems {
+		resp["items"] = items
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func handleListPushJobs(c *gin.Context, svc *Service) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	jobs, err := svc.ListPushJobs(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if jobs == nil {
+		jobs = []*PushJob{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": jobs, "activeJobID": svc.ActivePushJob()})
+}
+
+func handleRetryPushJob(c *gin.Context, svc *Service) {
+	job, err := svc.RetryPushJob(c.Param("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrPushJobNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrExportJobRunning):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job": job, "activeJobID": svc.ActivePushJob()})
+}
+
+func handleCancelPushJob(c *gin.Context, svc *Service) {
+	if err := svc.CancelPushJob(c.Param("id")); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func handlePushStatus(c *gin.Context, svc *Service) {
+	daysParam, _ := strconv.Atoi(c.DefaultQuery("days", "0"))
+	days, err := ValidatePushWindow(daysParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !svc.IsPushConfigured() {
+		c.JSON(http.StatusOK, gin.H{
+			"configured": false,
+			"pushed":     0,
+			"pending":    0,
+			"blocked":    0,
+			"days":       days,
+		})
+		return
+	}
+
+	stats, err := svc.GetPushStatus(days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"configured": true,
+		"pushed":     stats.Pushed,
 		"pending":    stats.Pending,
 		"blocked":    stats.Blocked,
 		"days":       stats.Days,

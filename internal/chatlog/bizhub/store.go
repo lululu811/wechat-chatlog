@@ -16,6 +16,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 
+	"github.com/sjzar/chatlog/internal/chatlog/bizhub/imapush"
 	"github.com/sjzar/chatlog/internal/chatlog/bizhub/mdexport"
 	"github.com/sjzar/chatlog/internal/model"
 )
@@ -58,6 +59,11 @@ type Article struct {
 	PublishedAt int64  `json:"publishedAt"`
 	SyncedAt    int64  `json:"syncedAt"`
 	Bookmarked  bool   `json:"bookmarked"`
+	IsRead      bool   `json:"isRead"`
+	// 归档 / 推送 状态 —— 由 articleRows 的 LEFT JOIN biz_exported_articles 填充。
+	// 前端用这两个字段决定按钮 disabled / 高亮。空字符串 = 没有归档记录。
+	ExportStatus string `json:"exportStatus,omitempty"` // exported / summary_generated / failed / ""
+	PushStatus   string `json:"pushStatus,omitempty"`   // pushed / push_failed / ""
 }
 
 // Summary 关注公众号文章的 LLM 汇总
@@ -134,6 +140,14 @@ type ExportedArticle struct {
 	Attempts    int    `json:"attempts"` // 累计尝试次数，用于重试上限判定
 	ExportedAt  int64  `json:"exportedAt"`
 	SummaryAt   int64  `json:"summaryAt"`
+
+	// 推送记录（IMA）—— 与 MD 字段独立。
+	// 一篇文章可以 MD 成功 / IMA 未推、MD 失败 / IMA 已推，状态由这两组字段组合。
+	PushedStatus  string `json:"pushedStatus,omitempty"`  // pushed / push_failed / ""
+	PushedMediaID string `json:"pushedMediaID,omitempty"` // IMA 返回的 media_id
+	PushedAt      int64  `json:"pushedAt"`
+	PushAttempts  int    `json:"pushAttempts"`
+	PushKind      string `json:"pushKind,omitempty"`
 }
 
 // ExportJob 批量归档任务（biz_export_jobs 表）。
@@ -332,6 +346,16 @@ CREATE TABLE IF NOT EXISTS biz_feed_summaries (
     computed_at INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS biz_daily_digests (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    digest_date TEXT NOT NULL,
+    headline    TEXT NOT NULL DEFAULT '',
+    picks       TEXT NOT NULL DEFAULT '[]',
+    article_ids TEXT NOT NULL DEFAULT '[]',
+    computed_at INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(digest_date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_articles_ghid ON biz_articles(gh_id);
 CREATE INDEX IF NOT EXISTS idx_articles_time ON biz_articles(published_at);
 CREATE INDEX IF NOT EXISTS idx_account_tags_ghid ON biz_account_tags(gh_id);
@@ -446,6 +470,11 @@ CREATE INDEX IF NOT EXISTS idx_export_job_items_status ON biz_export_job_items(j
 			return err
 		}
 	}
+	if !artCols["is_read"] {
+		if _, err := s.db.Exec(`ALTER TABLE biz_articles ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
 
 	// biz_summaries 渐进式列扩展（PRAGMA 检测，不存在则 ALTER）
 	sumCols := make(map[string]bool)
@@ -521,6 +550,13 @@ CREATE INDEX IF NOT EXISTS idx_export_job_items_status ON biz_export_job_items(j
 	expAlters := []exportCol{
 		{"kind", "TEXT NOT NULL DEFAULT ''"},
 		{"attempts", "INTEGER NOT NULL DEFAULT 0"},
+		// 推送状态字段（与 MD 归档的 status / kind / attempts 完全独立）：
+		// 一篇可以 MD 失败 / IMA 已推，或 MD 成功 / IMA 未推。
+		{"pushed_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"pushed_media_id", "TEXT NOT NULL DEFAULT ''"},
+		{"pushed_status", "TEXT NOT NULL DEFAULT ''"},
+		{"push_attempts", "INTEGER NOT NULL DEFAULT 0"},
+		{"push_kind", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, c := range expAlters {
 		if expCols[c.name] {
@@ -529,6 +565,48 @@ CREATE INDEX IF NOT EXISTS idx_export_job_items_status ON biz_export_job_items(j
 		if _, err := s.db.Exec(`ALTER TABLE biz_exported_articles ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
 			return err
 		}
+	}
+
+	// biz_push_jobs / biz_push_job_items —— 批量推送任务镜像 biz_export_jobs。
+	//
+	// 为什么单建一张表、不复用 export 的 job+item 表：聚合 SQL / 索引 / 状态机
+	// 都与 export 任务独立；用 job_type 字段共享一份表会让所有聚合查询都得带
+	// 类型过滤，复杂度上移到 store 层。push 是新功能、独立的并发槽位、独立
+	// 的失败分类，独立表更干净。
+	pushJobSchema := `
+CREATE TABLE IF NOT EXISTS biz_push_jobs (
+    id          TEXT PRIMARY KEY,
+    status      TEXT NOT NULL DEFAULT 'running',
+    days        INTEGER NOT NULL DEFAULT 30,
+    max_items   INTEGER NOT NULL DEFAULT 100,
+    concurrency INTEGER NOT NULL DEFAULT 3,
+    degraded    INTEGER NOT NULL DEFAULT 0,
+    total       INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL DEFAULT 0,
+    finished_at INTEGER NOT NULL DEFAULT 0,
+    error       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_jobs_status ON biz_push_jobs(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS biz_push_job_items (
+    job_id     TEXT NOT NULL,
+    article_id INTEGER NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    account    TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'pending',
+    kind       TEXT NOT NULL DEFAULT '',
+    error      TEXT NOT NULL DEFAULT '',
+    media_id   TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (job_id, article_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_job_items_status ON biz_push_job_items(job_id, status);
+`
+	if _, err := s.db.Exec(pushJobSchema); err != nil {
+		return err
 	}
 
 	return nil
@@ -730,17 +808,20 @@ func (s *Store) SetAccountsWatched(ghIDs []string, watched bool) error {
 // 「全部」模式要当资料库用，得能翻到未关注、甚至已隐藏公众号的旧文。
 // 两个条件都可选：GHID 为空即全部公众号，Days <= 0 即不限时间。
 type ArticleFilter struct {
-	GHID   string
-	Days   int
-	Limit  int
-	Offset int
+	GHID       string
+	Days       int
+	Limit      int
+	Offset     int
+	UnreadOnly bool
 }
 
 const articleRows = `
 	SELECT a.id, a.gh_id, COALESCE(acc.gh_name, ''), a.title, a.description, a.url,
-	       a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked
+	       a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+	       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
 	FROM biz_articles a
-	LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id`
+	LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+	LEFT JOIN biz_exported_articles e ON a.id = e.article_id`
 
 // articleWhere 生成 WHERE 子句与参数。列表查询与计数必须共用它，
 // 否则 total 与实际返回条数会不一致（这类不一致只在翻页到头时才暴露）。
@@ -755,6 +836,9 @@ func articleWhere(f ArticleFilter) (string, []any) {
 		conds = append(conds, "a.published_at >= ?")
 		args = append(args, time.Now().Add(-time.Duration(f.Days)*24*time.Hour).Unix())
 	}
+	if f.UnreadOnly {
+		conds = append(conds, "a.is_read = 0")
+	}
 	if len(conds) == 0 {
 		return "", nil
 	}
@@ -766,11 +850,12 @@ func scanArticles(rows *sql.Rows) ([]Article, error) {
 	var articles []Article
 	for rows.Next() {
 		var a Article
-		var bookmarked int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked); err != nil {
+		var bookmarked, isRead int
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
+		a.IsRead = isRead != 0
 		articles = append(articles, a)
 	}
 	return articles, rows.Err()
@@ -825,13 +910,16 @@ func (s *Store) GetArticle(id int64) (*Article, error) {
 	defer s.mu.RUnlock()
 
 	var a Article
-	var bookmarked int
+	var bookmarked, isRead int
 	err := s.db.QueryRow(`
-		SELECT a.id, a.gh_id, COALESCE(acc.gh_name, ''), a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked
+		SELECT a.id, a.gh_id, COALESCE(acc.gh_name, ''), a.title, a.description, a.url,
+		       a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
 		WHERE a.id = ?
-	`, id).Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked)
+	`, id).Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -839,6 +927,7 @@ func (s *Store) GetArticle(id int64) (*Article, error) {
 		return nil, err
 	}
 	a.Bookmarked = bookmarked != 0
+	a.IsRead = isRead != 0
 	return &a, nil
 }
 
@@ -855,9 +944,11 @@ func (s *Store) SearchArticles(keyword string, limit, offset int) ([]Article, er
 	}
 
 	rows, err := s.db.Query(`
-		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked
+		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
 		WHERE a.title LIKE ?
 		AND a.gh_id NOT IN (SELECT gh_id FROM biz_accounts WHERE hidden = 1)
 		ORDER BY a.published_at DESC
@@ -871,11 +962,12 @@ func (s *Store) SearchArticles(keyword string, limit, offset int) ([]Article, er
 	var articles []Article
 	for rows.Next() {
 		var a Article
-		var bookmarked int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked); err != nil {
+		var bookmarked, isRead int
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
+		a.IsRead = isRead != 0
 		articles = append(articles, a)
 	}
 	return articles, rows.Err()
@@ -898,9 +990,11 @@ func (s *Store) GetFeedArticles(days, limit, offset int) ([]Article, error) {
 
 	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
 	rows, err := s.db.Query(`
-		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked
+		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
 		FROM biz_articles a
 		JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
 		WHERE acc.hidden = 0 AND acc.watched = 1 AND a.published_at >= ?
 		ORDER BY a.published_at DESC
 		LIMIT ? OFFSET ?
@@ -913,11 +1007,12 @@ func (s *Store) GetFeedArticles(days, limit, offset int) ([]Article, error) {
 	var articles []Article
 	for rows.Next() {
 		var a Article
-		var bookmarked int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked); err != nil {
+		var bookmarked, isRead int
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
+		a.IsRead = isRead != 0
 		articles = append(articles, a)
 	}
 	return articles, rows.Err()
@@ -933,9 +1028,11 @@ func (s *Store) GetWatchedArticlesSince(since time.Time, limit int) ([]Article, 
 	}
 
 	rows, err := s.db.Query(`
-		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked
+		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
 		FROM biz_articles a
 		JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
 		WHERE acc.hidden = 0 AND acc.watched = 1 AND a.published_at >= ?
 		ORDER BY a.published_at DESC
 		LIMIT ?
@@ -948,11 +1045,12 @@ func (s *Store) GetWatchedArticlesSince(since time.Time, limit int) ([]Article, 
 	var articles []Article
 	for rows.Next() {
 		var a Article
-		var bookmarked int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked); err != nil {
+		var bookmarked, isRead int
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
+		a.IsRead = isRead != 0
 		if desc := []rune(a.Desc); len(desc) > 100 {
 			a.Desc = string(desc[:100])
 		}
@@ -993,6 +1091,63 @@ func (s *Store) SetArticlesBookmarked(ids []int64, bookmarked bool) error {
 	return tx.Commit()
 }
 
+// SetArticlesRead 批量标记文章已读/未读
+func (s *Store) SetArticlesRead(ids []int64, read bool) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	v := 0
+	if read {
+		v = 1
+	}
+	stmt, err := tx.Prepare(`UPDATE biz_articles SET is_read = ? WHERE id = ?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, id := range ids {
+		if _, err := stmt.Exec(v, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// MarkAllRead 把当前可见的文章全部标记为已读。
+// ghid 非空时只标记该账号；days > 0 时只标记最近 N 天。
+func (s *Store) MarkAllRead(ghid string, days int) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `UPDATE biz_articles SET is_read = 1 WHERE is_read = 0`
+	var args []any
+
+	if ghid != "" {
+		query += ` AND gh_id = ?`
+		args = append(args, ghid)
+	}
+	if days > 0 {
+		query += ` AND published_at >= ?`
+		args = append(args, time.Now().AddDate(0, 0, -days).Unix())
+	}
+
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // GetBookmarkedArticles 获取已收藏文章列表（按发布时间倒序）
 func (s *Store) GetBookmarkedArticles(limit, offset int) ([]Article, error) {
 	s.mu.RLock()
@@ -1006,9 +1161,11 @@ func (s *Store) GetBookmarkedArticles(limit, offset int) ([]Article, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked
+		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
 		WHERE a.bookmarked = 1
 		ORDER BY a.published_at DESC
 		LIMIT ? OFFSET ?
@@ -1021,11 +1178,12 @@ func (s *Store) GetBookmarkedArticles(limit, offset int) ([]Article, error) {
 	var articles []Article
 	for rows.Next() {
 		var a Article
-		var bookmarked int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked); err != nil {
+		var bookmarked, isRead int
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
+		a.IsRead = isRead != 0
 		articles = append(articles, a)
 	}
 	return articles, rows.Err()
@@ -1091,6 +1249,7 @@ func (s *Store) CountFeedArticles(days int) (int, error) {
 		SELECT COUNT(1)
 		FROM biz_articles a
 		JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
 		WHERE acc.hidden = 0 AND acc.watched = 1 AND a.published_at >= ?
 	`, since).Scan(&n)
 	return n, err
@@ -1222,7 +1381,212 @@ func (s *Store) GetLatestFeedSummary(windowDays int) (headline, structured strin
 	return headline, structured, computedAt, true, nil
 }
 
-// UpsertContent 写入或更新文章抓取结果（按 url_hash 主键）
+// --- 每日精选 ---
+
+// DailyDigest 每日精选结果
+type DailyDigest struct {
+	ID         int64    `json:"id"`
+	DigestDate string   `json:"digestDate"`
+	Headline   string   `json:"headline"`
+	Picks      []DigestPick `json:"picks"`
+	ArticleIDs []int64  `json:"articleIds"`
+	ComputedAt int64    `json:"computedAt"`
+}
+
+// DigestPick 单篇精选
+type DigestPick struct {
+	ArticleID int64  `json:"articleId"`
+	Title     string `json:"title"`
+	GHName    string `json:"ghName"`
+	URL       string `json:"url"`
+	Reason    string `json:"reason"`
+	Score     int    `json:"score"`
+}
+
+// UpsertDailyDigest 写入或更新某天的每日精选
+func (s *Store) UpsertDailyDigest(digestDate, headline string, picks []DigestPick, articleIDs []int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	picksJSON, _ := json.Marshal(picks)
+	idsJSON, _ := json.Marshal(articleIDs)
+
+	_, err := s.db.Exec(`INSERT INTO biz_daily_digests (digest_date, headline, picks, article_ids, computed_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(digest_date) DO UPDATE SET headline=excluded.headline, picks=excluded.picks, article_ids=excluded.article_ids, computed_at=excluded.computed_at`,
+		digestDate, headline, string(picksJSON), string(idsJSON), time.Now().Unix())
+	return err
+}
+
+// GetDailyDigest 取某天的精选；不存在时返回 nil, nil
+func (s *Store) GetDailyDigest(digestDate string) (*DailyDigest, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row := s.db.QueryRow(`SELECT id, digest_date, headline, picks, article_ids, computed_at FROM biz_daily_digests WHERE digest_date = ?`, digestDate)
+	var d DailyDigest
+	var picksStr, idsStr string
+	if err := row.Scan(&d.ID, &d.DigestDate, &d.Headline, &picksStr, &idsStr, &d.ComputedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	json.Unmarshal([]byte(picksStr), &d.Picks)
+	json.Unmarshal([]byte(idsStr), &d.ArticleIDs)
+	if d.Picks == nil {
+		d.Picks = []DigestPick{}
+	}
+	if d.ArticleIDs == nil {
+		d.ArticleIDs = []int64{}
+	}
+	return &d, nil
+}
+
+// GetLatestDailyDigest 取最近一天的精选
+func (s *Store) GetLatestDailyDigest() (*DailyDigest, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row := s.db.QueryRow(`SELECT id, digest_date, headline, picks, article_ids, computed_at FROM biz_daily_digests ORDER BY digest_date DESC LIMIT 1`)
+	var d DailyDigest
+	var picksStr, idsStr string
+	if err := row.Scan(&d.ID, &d.DigestDate, &d.Headline, &picksStr, &idsStr, &d.ComputedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	json.Unmarshal([]byte(picksStr), &d.Picks)
+	json.Unmarshal([]byte(idsStr), &d.ArticleIDs)
+	if d.Picks == nil {
+		d.Picks = []DigestPick{}
+	}
+	if d.ArticleIDs == nil {
+		d.ArticleIDs = []int64{}
+	}
+	return &d, nil
+}
+
+// --- 板块看板 ---
+
+// GetSectorDashboard 按标签聚合 watched 账号近期文章热度。
+// 只返回有文章的标签，按文章数降序。每个标签附带最多 5 篇最新文章。
+func (s *Store) GetSectorDashboard(days int) ([]SectorSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	since := time.Now().AddDate(0, 0, -days).Unix()
+
+	// 1. 取每个标签下的文章数和 tag 信息
+	rows, err := s.db.Query(`
+		SELECT t.id, t.name, t.color, COUNT(a.id) as cnt
+		FROM biz_tags t
+		JOIN biz_account_tags at ON t.id = at.tag_id
+		JOIN biz_accounts acc ON at.gh_id = acc.gh_id
+		JOIN biz_articles a ON a.gh_id = acc.gh_id
+		WHERE acc.watched = 1 AND acc.hidden = 0 AND a.published_at >= ?
+		GROUP BY t.id
+		ORDER BY cnt DESC
+	`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sectors []SectorSummary
+	for rows.Next() {
+		var sec SectorSummary
+		if err := rows.Scan(&sec.TagID, &sec.TagName, &sec.Color, &sec.ArticleCount); err != nil {
+			return nil, err
+		}
+		sectors = append(sectors, sec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 2. 每个标签取最新 5 篇文章
+	for i := range sectors {
+		artRows, err := s.db.Query(`
+			SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+			FROM biz_articles a
+			JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+			LEFT JOIN biz_exported_articles e ON a.id = e.article_id
+			JOIN biz_account_tags at ON acc.gh_id = at.gh_id
+			WHERE at.tag_id = ? AND acc.watched = 1 AND acc.hidden = 0 AND a.published_at >= ?
+			ORDER BY a.published_at DESC
+			LIMIT 5
+		`, sectors[i].TagID, since)
+		if err != nil {
+			continue
+		}
+		articles, err := scanArticles(artRows)
+		artRows.Close()
+		if err != nil {
+			continue
+		}
+		sectors[i].TopArticles = articles
+	}
+
+	if sectors == nil {
+		sectors = []SectorSummary{}
+	}
+	return sectors, nil
+}
+
+// --- 文章时间线 ---
+
+// SearchTimeline 按关键词搜索 watched 账号文章（标题 + 描述匹配），按时间排序
+func (s *Store) SearchTimeline(keyword string, days, limit int) ([]Article, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	since := time.Now().AddDate(0, 0, -days).Unix()
+	pattern := "%" + keyword + "%"
+
+	// 总数
+	var total int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM biz_articles a
+		JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
+		WHERE acc.watched = 1 AND acc.hidden = 0
+		  AND a.published_at >= ?
+		  AND (a.title LIKE ? OR a.description LIKE ?)
+	`, since, pattern, pattern).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 文章列表
+	rows, err := s.db.Query(`
+		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+		FROM biz_articles a
+		JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
+		WHERE acc.watched = 1 AND acc.hidden = 0
+		  AND a.published_at >= ?
+		  AND (a.title LIKE ? OR a.description LIKE ?)
+		ORDER BY a.published_at DESC
+		LIMIT ?
+	`, since, pattern, pattern, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	articles, err := scanArticles(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return articles, total, nil
+}
+
+// --- MD 导出 ---
 func (s *Store) UpsertContent(urlHash, url, title, content string, status int, errStr string, bytes int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1552,13 +1916,25 @@ func (s *Store) InitDefaultTags() error {
 		Name  string
 		Color string
 	}{
-		{"新闻", "#ef4444"},
-		{"技术", "#3b82f6"},
+		{"股市投资", "#ef4444"},
+		{"产业行业", "#3b82f6"},
+		{"交通出行", "#0ea5e9"},
+		{"消费品牌", "#f59e0b"},
+		{"新疆本地", "#84cc16"},
+		{"工具SaaS", "#a855f7"},
+		{"自媒体", "#ec4899"},
+		{"影视内容", "#d946ef"},
+		{"公用事业", "#14b8a6"},
+		{"旅行票务", "#f97316"},
+		{"文化阅读", "#6366f1"},
+		{"城市服务", "#0284c7"},
+		{"新闻", "#f97316"},
+		{"技术", "#06b6d4"},
 		{"金融", "#10b981"},
 		{"政府", "#8b5cf6"},
 		{"生活", "#f59e0b"},
 		{"娱乐", "#ec4899"},
-		{"教育", "#06b6d4"},
+		{"教育", "#84cc16"},
 		{"其他", "#6b7280"},
 	}
 
@@ -1591,7 +1967,22 @@ func (s *Store) AutoTagAccounts() error {
 	}
 
 	// 关键词映射
+	//
+	// 匹配顺序影响结果：越具体的越靠前。"股市投资"和"产业行业"放在最前面，
+	// 因为它们比"金融"更精准 —— 否则"广发证券"会被"金融"先吃掉。
 	rules := map[string][]string{
+		"股市投资": {"ETF", "策市", "看市", "解盘", "后势", "研报", "大户室", "盘前", "指数投资", "价值投资", "期货投研", "金融工程", "策略研究", "券商中国", "证券报", "基金报", "银河策略", "证券", "中金", "华泰睿思", "华尔街见闻", "财经世界"},
+		"产业行业": {"产业", "行业观察", "产业链", "半导体", "投研笔记", "科技评论", "光电前瞻", "光互连", "金属加工", "新能源", "非金属矿", "算力", "信创", "TMT", "远川科技"},
+		"交通出行": {"航空", "机场", "铁路", "12306", "速运", "快递", "闪送", "滴滴", "出行", "公交", "公路客运", "快运"},
+		"消费品牌": {"京东", "肯德基", "瑞幸", "MUJI", "无印良品", "迪卡侬", "名创优品", "汉堡王", "茅台", "影城", "影院", "信用卡"},
+		"新疆本地": {"新疆", "乌鲁木齐", "库尔勒", "疆内", "巴州", "天山行"},
+		"工具SaaS": {"Apifox", "ProcessOn", "墨刀", "CSDN", "51CTO", "牛客网", "PMO", "项目管理", "易企秀", "讯飞智文", "脚本之家"},
+		"自媒体": {"自修", "小菜", "课代表", "狮兄", "戴老板", "土狗"},
+		"影视内容": {"美剧", "大片", "DOTA", "崩坏", "HIPHOP"},
+		"公用事业": {"移动", "电信", "联通", "供水", "药房", "大药房", "疾控", "码上检"},
+		"旅行票务": {"旅行", "票务", "同程", "飞常准"},
+		"文化阅读": {"博物馆", "美术馆", "Kindle", "阅读室"},
+		"城市服务": {"本地宝", "城市通卡", "普法", "保密观", "公积金", "人社", "招生"},
 		"新闻": {"日报", "晚报", "晨报", "新闻", "时报", "周刊", "杂志", "观察", "记者", "爆料"},
 		"技术": {"程序", "代码", "开发", "技术", "架构", "算法", "AI", "互联网", "科技", "软件", "开源", "GitHub", "Java", "Python", "前端", "后端"},
 		"金融": {"金融", "银行", "证券", "基金", "保险", "投资", "理财", "股票", "期货", "信托", "支付", "财经", "经济"},
@@ -1602,6 +1993,11 @@ func (s *Store) AutoTagAccounts() error {
 	}
 
 	for _, acc := range accounts {
+		// 跳过已有标签的账号：手动分过的不再被自动分类覆盖
+		if existing, err := s.GetAccountTags(acc.GHID); err == nil && len(existing) > 0 {
+			continue
+		}
+
 		name := strings.ToLower(acc.GHName)
 		var tagIDs []int64
 
@@ -1688,10 +2084,95 @@ func (s *Store) UpsertExportRecord(articleID int64, sourceURL, mdPath, summaryPa
 			exported_at=CASE WHEN excluded.exported_at > 0 THEN excluded.exported_at ELSE biz_exported_articles.exported_at END,
 			summary_at=CASE 
 				WHEN excluded.summary_at > 0 THEN excluded.summary_at
-				ELSE biz_exported_articles.summary_at 
-			END`,
+				ELSE biz_exported_articles.summary_at
+		END`,
 		articleID, sourceURL, mdPath, summaryPath, status, errStr, kind, attemptSeed, exportedAt, summaryAt)
 	return err
+}
+
+// PushStatus 推送状态常量（与 ExportStatus* 镜像，独立使用）。
+//
+// 状态机：
+//
+//	(空) --成功--> pushed
+//	(空) --失败--> push_failed  --再次批量推送--> pushed
+//
+// push_failed 不是终态。下次批量推送会把 push_failed 重新纳入候选（除非
+// attempts 用尽或失败类型是「需人工处理」）。
+const (
+	PushStatusPushed  = "pushed"
+	PushStatusFailed  = "push_failed"
+)
+
+// maxPushAttempts 推送自动重试上限。
+//
+// 与 MD 归档同款：可重试失败（超时 / 限流 / script_failed）如果一直失败，
+// 无限重试只会每轮都在同一篇上浪费时间且加重 IMA 端限流。
+const maxPushAttempts = 3
+
+// UpsertPushRecord 插入或更新推送记录（按 article_id 去重）。
+//
+// 只动 pushed_* 字段；md_path / status / attempts 一律保留 —— 链式约束下
+// push 失败绝不能把"已归档"的标记弄丢。
+//
+// attempts 的维护规则（与 UpsertExportRecord 对仗）：
+//
+//	新记录 + pushed         -> 0
+//	新记录 + push_failed    -> 1
+//	已有记录 + push_failed   -> 旧值 + 1
+//	已有记录 + pushed        -> 归 0
+func (s *Store) UpsertPushRecord(articleID int64, mediaID, status, kind, errStr string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	pushedAt := int64(0)
+	if status == PushStatusPushed {
+		pushedAt = now
+	}
+	attemptSeed := 0
+	if status == PushStatusFailed {
+		attemptSeed = 1
+	}
+
+	_, err := s.db.Exec(`INSERT INTO biz_exported_articles
+		(article_id, source_url, md_path, summary_path, status, error, kind, attempts,
+		 exported_at, summary_at,
+		 pushed_at, pushed_media_id, pushed_status, push_attempts, push_kind)
+		VALUES (?, '', '', '', 'exported', '', '', 0, 0, 0, ?, ?, ?, ?, ?)
+		ON CONFLICT(article_id) DO UPDATE SET
+			-- media_id：失败时不要把已有 media_id 抹成空串 —— 重推成功的关键线索
+			pushed_media_id=CASE WHEN excluded.pushed_media_id != '' THEN excluded.pushed_media_id ELSE biz_exported_articles.pushed_media_id END,
+			pushed_status=excluded.pushed_status,
+			push_kind=excluded.push_kind,
+			push_attempts=CASE
+				WHEN excluded.pushed_status = 'push_failed' THEN biz_exported_articles.push_attempts + 1
+				WHEN excluded.pushed_status = 'pushed' THEN 0
+				ELSE biz_exported_articles.push_attempts
+			END,
+			pushed_at=CASE WHEN excluded.pushed_at > 0 THEN excluded.pushed_at ELSE biz_exported_articles.pushed_at END`,
+		articleID, pushedAt, mediaID, status, attemptSeed, kind, errStr)
+	return err
+}
+
+// IsArticleExported 判定文章是否已经 MD 归档成功（链式 push 的前置条件）。
+//
+// status IN ('exported', 'summary_generated') 表示归档成功；status='failed'
+// 或没有记录都视为未归档。单篇 push handler 与 buildPushPlan 都依赖此判定，
+// 必须共用同一个语义。
+func (s *Store) IsArticleExported(articleID int64) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var status string
+	err := s.db.QueryRow(`SELECT status FROM biz_exported_articles WHERE article_id = ?`, articleID).Scan(&status)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == "exported" || status == "summary_generated", nil
 }
 
 // GetExportRecord 按 article_id 获取导出记录
@@ -1700,9 +2181,10 @@ func (s *Store) GetExportRecord(articleID int64) (*ExportedArticle, error) {
 	defer s.mu.RUnlock()
 
 	var e ExportedArticle
-	err := s.db.QueryRow(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at 
+	err := s.db.QueryRow(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at,
+		       pushed_status, pushed_media_id, pushed_at, push_attempts, push_kind
 		FROM biz_exported_articles WHERE article_id = ?`, articleID).
-		Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt)
+		Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt, &e.PushedStatus, &e.PushedMediaID, &e.PushedAt, &e.PushAttempts, &e.PushKind)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -1718,9 +2200,10 @@ func (s *Store) GetExportRecordByURL(url string) (*ExportedArticle, error) {
 	defer s.mu.RUnlock()
 
 	var e ExportedArticle
-	err := s.db.QueryRow(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at 
+	err := s.db.QueryRow(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at,
+		       pushed_status, pushed_media_id, pushed_at, push_attempts, push_kind
 		FROM biz_exported_articles WHERE source_url = ?`, url).
-		Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt)
+		Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt, &e.PushedStatus, &e.PushedMediaID, &e.PushedAt, &e.PushAttempts, &e.PushKind)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -1744,7 +2227,8 @@ func (s *Store) GetExportRecordsByArticleIDs(ids []int64) (map[int64]*ExportedAr
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := `SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at 
+	query := `SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at,
+		       pushed_status, pushed_media_id, pushed_at, push_attempts, push_kind
 		FROM biz_exported_articles WHERE article_id IN (` + strings.Join(placeholders, ",") + `)`
 
 	rows, err := s.db.Query(query, args...)
@@ -1756,7 +2240,7 @@ func (s *Store) GetExportRecordsByArticleIDs(ids []int64) (map[int64]*ExportedAr
 	result := make(map[int64]*ExportedArticle)
 	for rows.Next() {
 		var e ExportedArticle
-		if err := rows.Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt, &e.PushedStatus, &e.PushedMediaID, &e.PushedAt, &e.PushAttempts, &e.PushKind); err != nil {
 			return nil, err
 		}
 		result[e.ArticleID] = &e
@@ -1795,7 +2279,8 @@ func (s *Store) GetUnexportedArticles(days, limit int) ([]Article, error) {
 
 	since := time.Now().AddDate(0, 0, -days).Unix()
 	rows, err := s.db.Query(`
-		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked
+		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
@@ -1811,11 +2296,12 @@ func (s *Store) GetUnexportedArticles(days, limit int) ([]Article, error) {
 	var articles []Article
 	for rows.Next() {
 		var a Article
-		var bookmarked int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked); err != nil {
+		var bookmarked, isRead int
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
+		a.IsRead = isRead != 0
 		articles = append(articles, a)
 	}
 	return articles, rows.Err()
@@ -2164,6 +2650,448 @@ func fillExportJobCounts(db *sql.DB, job *ExportJob) error {
 		job.ID).Scan(&job.Succeeded, &job.Failed, &job.Skipped, &job.Running, &job.Pending)
 }
 
+// --- biz_push_jobs / biz_push_job_items CRUD ---
+//
+// 与 biz_export_jobs 镜像结构，但有两个关键差异：
+//   1. 链式候选 SQL 必须先经过 export 成功筛选（这是 plan 里定的硬约束）
+//   2. 条目表多了 media_id 字段，没有 md_path（推送不写本地）
+
+// PushJob 批量推送任务
+type PushJob struct {
+	ID          string `json:"id"`
+	Status      string `json:"status"` // running / done / failed / canceled / interrupted
+	Days        int    `json:"days"`
+	MaxItems    int    `json:"maxItems"`
+	Concurrency int    `json:"concurrency"`
+	Degraded    bool   `json:"degraded"`
+	Total       int    `json:"total"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedAt   int64  `json:"updatedAt"`
+	FinishedAt  int64  `json:"finishedAt"`
+	Error       string `json:"error"`
+
+	// 以下为按 item 聚合的实时计数（读取时填充，不落库）
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	Skipped   int `json:"skipped"`
+	Running   int `json:"running"`
+	Pending   int `json:"pending"`
+}
+
+// Done 已完成（与 ExportJob.Done 对仗）
+func (j *PushJob) Done() bool {
+	return j.Status != ExportJobRunning
+}
+
+// Processed 已产生终态的条目数
+func (j *PushJob) Processed() int {
+	return j.Succeeded + j.Failed + j.Skipped
+}
+
+// Percent 进度百分比（0-100）
+func (j *PushJob) Percent() int {
+	if j.Total <= 0 {
+		return 100
+	}
+	p := j.Processed() * 100 / j.Total
+	if p > 100 {
+		p = 100
+	}
+	return p
+}
+
+// PushJobItem 批量推送任务中的单篇条目
+type PushJobItem struct {
+	JobID     string `json:"jobID"`
+	ArticleID int64  `json:"articleID"`
+	Title     string `json:"title"`
+	Account   string `json:"account"`
+	Status    string `json:"status"` // pending / running / done / failed / skipped
+	Kind      string `json:"kind"`
+	Error     string `json:"error"`
+	MediaID   string `json:"mediaID"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
+// PushCandidateWhere 批量推送的候选条件（SQL 片段）。
+//
+// 链式约束：必须先 export 成功；未 export 失败的不能 push。
+// 与 ExportCandidateWhere 对仗 —— 这里把所有判断集中在一个常量里，
+// 让页面 pending 计数与实际任务选取范围共用同一份口径。
+//
+// 复用 imapush.PermanentKinds 在 SQL 层没法直接拼（Go 层判断失败分类），
+// 这里只做"是否失败过"的最粗过滤；具体的"是否需人工处理"判断
+// 留给 buildPushPlan 在 Go 层做。
+const PushCandidateWhere = `a.published_at >= ?
+		  AND a.gh_id NOT IN (SELECT gh_id FROM biz_accounts WHERE hidden = 1)
+		  AND e.id IS NOT NULL
+		  AND e.status IN ('exported','summary_generated')
+		  AND (e.pushed_status = '' OR e.pushed_status = 'push_failed')`
+
+// GetPushableArticles 获取链式可推送的文章（用于批量推送/迁移）
+func (s *Store) GetPushableArticles(days, limit int) ([]Article, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if days <= 0 {
+		days = 30
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	since := time.Now().AddDate(0, 0, -days).Unix()
+	rows, err := s.db.Query(`
+		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+		FROM biz_articles a
+		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
+		WHERE `+PushCandidateWhere+`
+		ORDER BY a.published_at DESC
+		LIMIT ?
+	`, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var articles []Article
+	for rows.Next() {
+		var a Article
+		var bookmarked, isRead int
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
+			return nil, err
+		}
+		a.Bookmarked = bookmarked != 0
+		a.IsRead = isRead != 0
+		articles = append(articles, a)
+	}
+	return articles, rows.Err()
+}
+
+// PushStats 推送统计（管理页顶部）
+type PushStats struct {
+	Pushed int `json:"pushed"`
+	Pending int `json:"pending"`
+	Blocked int `json:"blocked"`
+	Days    int `json:"days"`
+}
+
+// GetPushStats 按给定时间窗统计推送情况
+func (s *Store) GetPushStats(days int) (*PushStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if days <= 0 {
+		days = 30
+	}
+	stats := &PushStats{Days: days}
+
+	// pushed：所有已成功推送的文章数
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM biz_exported_articles WHERE pushed_status = 'pushed'`).Scan(&stats.Pushed); err != nil {
+		return nil, err
+	}
+
+	// pending：候选集中、未推送、且非永久失败的篇数
+	since := time.Now().AddDate(0, 0, -days).Unix()
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1) FROM biz_articles a
+		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
+		WHERE `+PushCandidateWhere, since).Scan(&stats.Pending); err != nil {
+		return nil, err
+	}
+
+	// blocked：候选集中、已失败、且永久失败或 push_attempts 用尽的篇数
+	kinds := imapush.PermanentKinds()
+	args := []any{since, maxPushAttempts}
+	placeholders := make([]string, len(kinds))
+	for i, k := range kinds {
+		placeholders[i] = "?"
+		args = append(args, k)
+	}
+	blockedQuery := `
+		SELECT COUNT(1) FROM biz_articles a
+		JOIN biz_exported_articles e ON a.id = e.article_id
+		WHERE a.published_at >= ?
+		  AND e.status IN ('exported','summary_generated')
+		  AND e.pushed_status = 'push_failed'
+		  AND (e.push_attempts >= ? OR e.push_kind IN (` + strings.Join(placeholders, ",") + `))
+		  AND a.gh_id NOT IN (SELECT gh_id FROM biz_accounts WHERE hidden = 1)`
+	if err := s.db.QueryRow(blockedQuery, args...).Scan(&stats.Blocked); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
+// CreatePushJob 建任务并批量写入条目
+func (s *Store) CreatePushJob(job *PushJob, items []PushJobItem) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	if job.CreatedAt == 0 {
+		job.CreatedAt = now
+	}
+	job.UpdatedAt = now
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`INSERT INTO biz_push_jobs
+		(id, status, days, max_items, concurrency, degraded, total, created_at, updated_at, finished_at, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		job.ID, job.Status, job.Days, job.MaxItems, job.Concurrency, boolToInt(job.Degraded),
+		job.Total, job.CreatedAt, job.UpdatedAt, job.FinishedAt, job.Error); err != nil {
+		return err
+	}
+
+	if len(items) > 0 {
+		stmt, err := tx.Prepare(`INSERT INTO biz_push_job_items
+			(job_id, article_id, title, account, status, kind, error, media_id, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for _, it := range items {
+			if _, err := stmt.Exec(job.ID, it.ArticleID, it.Title, it.Account,
+				it.Status, it.Kind, it.Error, it.MediaID, now); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+// UpdatePushJobItem 更新单条目状态
+func (s *Store) UpdatePushJobItem(it PushJobItem) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`UPDATE biz_push_job_items
+		SET status=?, kind=?, error=?, media_id=?, updated_at=?
+		WHERE job_id=? AND article_id=?`,
+		it.Status, it.Kind, it.Error, it.MediaID, time.Now().Unix(), it.JobID, it.ArticleID)
+	return err
+}
+
+// GetPushJob 读任务，并填充按条目聚合的实时计数
+func (s *Store) GetPushJob(id string) (*PushJob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	job, err := scanPushJob(s.db.QueryRow(`SELECT id, status, days, max_items, concurrency, degraded,
+		total, created_at, updated_at, finished_at, error FROM biz_push_jobs WHERE id = ?`, id))
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, nil
+	}
+	if err := fillPushJobCounts(s.db, job); err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+// ListPushJobs 读最近的任务
+func (s *Store) ListPushJobs(limit int) ([]*PushJob, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`SELECT id, status, days, max_items, concurrency, degraded,
+		total, created_at, updated_at, finished_at, error
+		FROM biz_push_jobs ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []*PushJob
+	for rows.Next() {
+		job, err := scanPushJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		if job == nil {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, job := range jobs {
+		if err := fillPushJobCounts(s.db, job); err != nil {
+			return nil, err
+		}
+	}
+	return jobs, nil
+}
+
+// ListPushJobItems 读任务条目
+func (s *Store) ListPushJobItems(jobID string, statuses ...string) ([]PushJobItem, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `SELECT job_id, article_id, title, account, status, kind, error, media_id, updated_at
+		FROM biz_push_job_items WHERE job_id = ?`
+	args := []any{jobID}
+	if len(statuses) > 0 {
+		placeholders := make([]string, len(statuses))
+		for i, st := range statuses {
+			placeholders[i] = "?"
+			args = append(args, st)
+		}
+		query += ` AND status IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	query += ` ORDER BY updated_at DESC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []PushJobItem
+	for rows.Next() {
+		var it PushJobItem
+		if err := rows.Scan(&it.JobID, &it.ArticleID, &it.Title, &it.Account, &it.Status,
+			&it.Kind, &it.Error, &it.MediaID, &it.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
+// SetPushJobStatus 更新任务状态
+func (s *Store) SetPushJobStatus(id, status, errMsg string, finish bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	finishedAt := int64(0)
+	if finish {
+		finishedAt = now
+	}
+	_, err := s.db.Exec(`UPDATE biz_push_jobs
+		SET status=?, error=?, updated_at=?, finished_at=CASE WHEN ? > 0 THEN ? ELSE finished_at END
+		WHERE id=?`, status, errMsg, now, finishedAt, finishedAt, id)
+	return err
+}
+
+// SetPushJobConcurrency 记录降级后的并发数
+func (s *Store) SetPushJobConcurrency(id string, concurrency int, degraded bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`UPDATE biz_push_jobs
+		SET concurrency=?, degraded=?, updated_at=? WHERE id=?`,
+		concurrency, boolToInt(degraded), time.Now().Unix(), id)
+	return err
+}
+
+// RequeuePushJobUnfinished 把任务里所有"还没成功"的条目改回 pending
+func (s *Store) RequeuePushJobUnfinished(jobID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.db.Exec(`UPDATE biz_push_job_items
+		SET status=?, kind='', error='', media_id='', updated_at=?
+		WHERE job_id=? AND status != ?`,
+		ExportItemPending, time.Now().Unix(), jobID, ExportItemDone)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// MarkInterruptedPushJobs 启动时修复：把上次进程残留的 running 任务标为 interrupted
+func (s *Store) MarkInterruptedPushJobs() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query(`SELECT id FROM biz_push_jobs WHERE status = ? ORDER BY created_at DESC`, ExportJobRunning)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	now := time.Now().Unix()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`UPDATE biz_push_jobs
+		SET status=?, error=?, updated_at=? WHERE status = ?`,
+		ExportJobInterrupted, "服务重启导致中断，可续跑", now, ExportJobRunning); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`UPDATE biz_push_job_items
+		SET status=?, updated_at=? WHERE status = ?`,
+		ExportItemPending, now, ExportItemRunning); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func scanPushJob(sc exportJobScanner) (*PushJob, error) {
+	var job PushJob
+	var degraded int
+	err := sc.Scan(&job.ID, &job.Status, &job.Days, &job.MaxItems, &job.Concurrency,
+		&degraded, &job.Total, &job.CreatedAt, &job.UpdatedAt, &job.FinishedAt, &job.Error)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	job.Degraded = degraded != 0
+	return &job, nil
+}
+
+func fillPushJobCounts(db *sql.DB, job *PushJob) error {
+	return db.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0)
+		FROM biz_push_job_items WHERE job_id = ?`,
+		ExportItemDone, ExportItemFailed, ExportItemSkipped, ExportItemRunning, ExportItemPending,
+		job.ID).Scan(&job.Succeeded, &job.Failed, &job.Skipped, &job.Running, &job.Pending)
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1
@@ -2215,7 +3143,7 @@ func (s *Store) GetExportRecordsWithoutSummary(limit int) ([]ExportedArticle, er
 	var records []ExportedArticle
 	for rows.Next() {
 		var e ExportedArticle
-		if err := rows.Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.ArticleID, &e.SourceURL, &e.MDPath, &e.SummaryPath, &e.Status, &e.Error, &e.Kind, &e.Attempts, &e.ExportedAt, &e.SummaryAt, &e.PushedStatus, &e.PushedMediaID, &e.PushedAt, &e.PushAttempts, &e.PushKind); err != nil {
 			return nil, err
 		}
 		records = append(records, e)

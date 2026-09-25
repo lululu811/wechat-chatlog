@@ -637,3 +637,7 @@ func (c *stubExportConfig) GetFeedSummaryCacheHours() int   { return 0 }
 func (c *stubExportConfig) GetMDExportDir() string          { return c.dir }
 func (c *stubExportConfig) GetMDExportScript() string       { return c.script }
 func (c *stubExportConfig) GetMDExportConcurrency() int     { return c.concurrency }
+func (c *stubExportConfig) GetIMAPushSkillDir() string      { return "" }
+func (c *stubExportConfig) GetIMAPushKBID() string          { return "" }
+func (c *stubExportConfig) GetIMAPushFolderID() string      { return "" }
+func (c *stubExportConfig) GetIMAPushConcurrency() int      { return 0 }

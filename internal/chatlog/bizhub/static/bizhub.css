@@ -39,23 +39,31 @@
     --font-sans: 'Inter', -apple-system, 'Helvetica Neue', sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-    :root {
-        --bg: #161513;
-        --surface: #201e1b;
-        --text: #ece8e2;
-        --text-secondary: #b4aea4;
-        --text-tertiary: #847d73;
-        --border: #38342d;
-        --border-light: #2b2823;
-        --accent: #5d9454;
-        --accent-hover: #6faa65;
-        --accent-soft: #487d40;
-        --accent-bg: rgba(93,148,84,0.14);
-        --hover: #292622;
-        --shadow: 0 1px 2px rgba(0,0,0,0.35);
-        --shadow-lift: 0 8px 24px rgba(0,0,0,0.45);
-    }
+/* 暗色令牌。
+ *
+ * 选择器的取舍：这里用 [data-theme="dark"] 而不是 @media (prefers-color-scheme: dark)。
+ * 因为要做「白天 / 夜晚 / 跟随系统」三态，系统偏好必须在 JS 里先解析成确定的值 ——
+ * 否则「跟随系统」和「显式指定」两套来源会同时作用于同一组令牌，无法区分谁优先。
+ * 于是深色值只在这一处定义，由 <head> 里的防闪烁脚本在首帧前打上 data-theme。
+ *
+ * 代价：脚本没跑起来时（极端情况）会停在白天模式。可以接受 ——
+ * 反过来的写法（保留 media query 兜底）需要把这一整组深色值再抄一遍，
+ * 两份令牌迟早走样，那份维护债比这个降级更贵。 */
+:root[data-theme="dark"] {
+    --bg: #161513;
+    --surface: #201e1b;
+    --text: #ece8e2;
+    --text-secondary: #b4aea4;
+    --text-tertiary: #847d73;
+    --border: #38342d;
+    --border-light: #2b2823;
+    --accent: #5d9454;
+    --accent-hover: #6faa65;
+    --accent-soft: #487d40;
+    --accent-bg: rgba(93,148,84,0.14);
+    --hover: #292622;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35);
+    --shadow-lift: 0 8px 24px rgba(0,0,0,0.45);
 }
 
 /* ============================== 基础与排版 ============================== */
@@ -174,6 +182,61 @@ body {
 
 .top-tab-spacer {
     flex: 1;
+}
+
+/* ============================== 主题切换 ============================== */
+
+/* 它不是导航项，所以不复用 .top-tab —— 那条类带 border-bottom 下划线，
+   是「当前页」的语义。这里只需要一个安静的图标按钮。 */
+.theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 4px;
+    padding: 6px 9px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    transition: color 0.18s, background-color 0.18s, border-color 0.18s;
+}
+
+.theme-toggle:hover {
+    color: var(--text);
+    background: var(--hover);
+    border-color: var(--border);
+}
+
+.theme-toggle .theme-icon {
+    display: block;
+    width: 15px;
+    height: 15px;
+}
+
+.theme-toggle .theme-icon svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* 窄屏只留图标：导航本身已经很挤，文字标签是第一个可以让位的。 */
+@media (max-width: 768px) {
+    .theme-toggle .theme-label { display: none; }
+    .theme-toggle { padding: 6px; }
+}
+
+/* 切换瞬间的过渡。
+ * 只在切换的这 200ms 内挂上：常驻的话首屏加载也会走一遍颜色动画，
+ * 看起来像页面没渲染完。reduced-motion 下 JS 干脆不会加这个类。 */
+html.theme-transition,
+html.theme-transition * {
+    transition: background-color 0.2s ease, border-color 0.2s ease,
+                color 0.2s ease, fill 0.2s ease !important;
 }
 
 .search-box:focus-within {

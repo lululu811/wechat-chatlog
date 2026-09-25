@@ -213,6 +213,43 @@ async function exportArticleMD(articleId, btn) {
     }
 }
 
+// pushArticleToIMA 单篇推送。链式前置：未 export 成功的不能推。
+//
+// 文案与按钮状态全部交给后端发回的 JSON —— 401/409/500 都显示后端的 error 字段，
+// 因为只有后端知道为什么不能推：是未配置 IMA（400）还是文章没归档（409），
+// 还是网络/凭证错（500）。
+async function pushArticleToIMA(articleId, btn) {
+    if (!btn) return;
+    if (btn.disabled) {
+        toast('请先执行 MD 归档', 'hint');
+        return;
+    }
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '推送中...';
+    try {
+        const resp = await apiFetch(`/api/v1/biz/articles/${articleId}/push`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+            // 409 = 未归档（链式硬约束）；400 = 未配置 IMA；其他 = 推送失败
+            const hint = resp.status === 409
+                ? '（提示：推送前需要先归档这篇文章）'
+                : (resp.status === 400 ? '（提示：请在 chatlog-server.json 配置 ima_push_skill_dir / ima_push_kb_id）' : '');
+            toast(`${data.error || '推送失败'} ${hint}`, 'error');
+            btn.textContent = originalText;
+            btn.disabled = false;
+            return;
+        }
+        btn.textContent = '✓ IMA';
+        btn.classList.add('pushed');
+        toast(`已推送: ${data.account || ''}/${data.title || ''} (media: ${data.mediaID || ''})`, 'success');
+    } catch (e) {
+        toast('推送请求失败: ' + e.message, 'error');
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+}
+
 async function generateArticleSummary(articleId, btn) {
     if (!btn) return;
     const originalText = btn.textContent;
@@ -258,4 +295,105 @@ async function triggerSync() {
         if (data.error) { toast(data.error, 'error'); btn.disabled = false; btn.textContent = '同步'; }
         else pollSyncStatus();
     } catch (err) { toast('同步失败', 'error'); btn.disabled = false; btn.textContent = '同步'; }
+}
+
+/* ---------- 主题切换：白天 / 夜晚 / 跟随系统 ---------- */
+/*
+ * 三态而不是两态：只做「白天 ⇄ 夜晚」的话，第一次点下去就再也没有
+ * 「跟随系统」这个选项了 —— 而它恰恰是默认行为，用户一旦点过就回不去。
+ * 所以顺序是 跟随系统 → 白天 → 夜晚 → 跟随系统。
+ *
+ * 存的是偏好（auto/light/dark），不是最终底色。两者必须分开：
+ * 直接存底色的话，系统主题变了、或者用户想重新跟随系统时，就无从判断了。
+ *
+ * 首帧防闪烁不在这里 —— 那段必须内联在 <head> 且早于样式表，
+ * 见 templates/layout.html 的 doc-head。
+ */
+
+const THEME_STORAGE_KEY = 'bizhub-theme';
+const THEME_ORDER = ['auto', 'light', 'dark'];
+
+const THEME_ICONS = {
+    auto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none"/></svg>',
+    light: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+    dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>'
+};
+
+const THEME_LABELS = { auto: '跟随系统', light: '白天', dark: '夜晚' };
+
+// 读偏好。隐私模式下 localStorage 会抛，拿不到就当「跟随系统」。
+function readThemePref() {
+    try {
+        const v = localStorage.getItem(THEME_STORAGE_KEY);
+        return THEME_LABELS[v] ? v : 'auto';
+    } catch (e) {
+        return 'auto';
+    }
+}
+
+function saveThemePref(pref) {
+    try { localStorage.setItem(THEME_STORAGE_KEY, pref); } catch (e) { /* 存不了就只在本页生效 */ }
+}
+
+// 偏好 → 实际底色。只有 auto 才需要问系统。
+function resolveTheme(pref) {
+    if (pref === 'light' || pref === 'dark') return pref;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+// 打底色 + 同步按钮外观。图标和文字说的是「当前偏好」，
+// 不是「当前底色」—— 跟随系统时底色是黑的，但用户的选择确实是「跟随系统」。
+function applyTheme(pref) {
+    const resolved = resolveTheme(pref);
+    document.documentElement.dataset.theme = resolved;
+
+    const btn = document.getElementById('themeToggle');
+    if (!btn) return;
+
+    btn.querySelector('.theme-icon').innerHTML = THEME_ICONS[pref] || THEME_ICONS.auto;
+    btn.querySelector('.theme-label').textContent = THEME_LABELS[pref] || THEME_LABELS.auto;
+
+    const hint = '主题：' + (THEME_LABELS[pref] || THEME_LABELS.auto) + '（点击切换）';
+    btn.title = hint;
+    btn.setAttribute('aria-label', hint);
+}
+
+// 切换瞬间才挂过渡类。常驻的话首屏加载也会走一遍颜色动画，
+// 看着像页面没渲染完；reduced-motion 下直接不做。
+function withThemeTransition(fn) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { fn(); return; }
+    const root = document.documentElement;
+    root.classList.add('theme-transition');
+    fn();
+    window.setTimeout(function () { root.classList.remove('theme-transition'); }, 220);
+}
+
+function cycleTheme() {
+    const cur = readThemePref();
+    const next = THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length];
+    saveThemePref(next);
+    withThemeTransition(function () { applyTheme(next); });
+}
+
+function initThemeToggle() {
+    const btn = document.getElementById('themeToggle');
+    if (!btn) return;
+
+    applyTheme(readThemePref());
+    btn.addEventListener('click', cycleTheme);
+
+    // 系统主题变了只在「跟随系统」下实时响应。
+    // 用户显式选了白天/夜晚还跟着系统改，等于把他的选择又抹掉了。
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = function () {
+        if (readThemePref() === 'auto') withThemeTransition(function () { applyTheme('auto'); });
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange); // Safari 13 及以下
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initThemeToggle);
+} else {
+    initThemeToggle();
 }

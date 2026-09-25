@@ -232,6 +232,26 @@ func (c *Context) GetMDExportConcurrency() int {
 	return 0
 }
 
+// GetIMAPushSkillDir TUI Context 不持久化 ima_push_skill_dir，返回空字符串
+func (c *Context) GetIMAPushSkillDir() string {
+	return ""
+}
+
+// GetIMAPushKBID TUI Context 不持久化 ima_push_kb_id，返回空字符串
+func (c *Context) GetIMAPushKBID() string {
+	return ""
+}
+
+// GetIMAPushFolderID TUI Context 不持久化 ima_push_folder_id，返回空字符串
+func (c *Context) GetIMAPushFolderID() string {
+	return ""
+}
+
+// GetIMAPushConcurrency TUI Context 不持久化 ima_push_concurrency，返回 0（调用方回退到默认 3）
+func (c *Context) GetIMAPushConcurrency() int {
+	return 0
+}
+
 func (c *Context) GetWebhook() *conf.Webhook {
 	return c.conf.Webhook
 }

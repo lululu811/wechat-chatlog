@@ -734,6 +734,46 @@
             <div class="main-card">
                 <div class="section-body">
                     <div class="section-head">
+                        <h3>IMA 推送</h3>
+                        <p>
+                            把已 MD 归档的文章推送到 IMA 知识库（调用 imaskai 的 <code>import_urls</code>）。
+                            链式约束：未归档成功的文章不会进候选集 —— 先归档，再推送。
+                            单批最多 10 URL，超出自动分批。失败分类与「MD 归档」对齐：限流自动降并发，凭证/技能升级/知识库错永久失败。
+                        </p>
+                    </div>
+                    <div class="task-status" id="pushStatus">加载中…</div>
+                    <div class="task-row">
+                        <label for="pushDays">时间范围</label>
+                        <select id="pushDays" onchange="loadPushStatus()">
+                            <option value="7">近 7 天</option>
+                            <option value="30" selected>近 30 天</option>
+                            <option value="90">近 90 天</option>
+                            <option value="180">近 180 天</option>
+                            <option value="365">近 365 天</option>
+                        </select>
+                        <label for="pushLimit">数量上限</label>
+                        <input type="number" id="pushLimit" value="100" min="1" max="1000" />
+                        <button class="btn btn-accent" onclick="startPushJob()" id="batchPushBtn">开始推送</button>
+                        <button class="btn" onclick="retryPushJob()" id="retryPushBtn" style="display: none;">重试未成功项</button>
+                        <button class="btn" onclick="cancelPushJob()" id="cancelPushBtn" style="display: none;">取消任务</button>
+                    </div>
+                    <div class="task-progress" id="pushProgress" style="display: none;">
+                        <div id="pushProgressText" style="font-size: 13px; margin-bottom: 6px;">推送中…</div>
+                        <div class="progress-track segmented">
+                            <div class="progress-seg ok" id="pushSegOk"></div>
+                            <div class="progress-seg bad" id="pushSegBad"></div>
+                            <div class="progress-seg skip" id="pushSegSkip"></div>
+                        </div>
+                        <div class="job-meta" id="pushProgressMeta"></div>
+                    </div>
+                    <div class="task-result" id="pushResult" style="display: none;"></div>
+                    <div class="job-failures" id="pushFailures" style="display: none;"></div>
+                </div>
+            </div>
+
+            <div class="main-card">
+                <div class="section-body">
+                    <div class="section-head">
                         <h3>摘要生成</h3>
                         <p>
                             为已归档的 Markdown 调用 LLM 生成结构化摘要（写入 YAML frontmatter），
@@ -1651,6 +1691,281 @@
         // 初始化：先拿统计（决定按钮是否可用），再把上次任务接回来
         loadExportStatus();
         restoreExportJob();
+
+        // --- IMA 推送 任务（与 MD 归档镜像）---
+
+        let pushPollTimer = null;
+        let pushCurrentJobID = null;
+        let pushConfigured = false;
+        let pushLastJob = null;
+
+        const PUSH_POLL_MS = 2000;
+        const PUSH_SHOW_FINISHED_SECONDS = 600;
+
+        function pushDays() {
+            return parseInt(document.getElementById('pushDays').value, 10) || 30;
+        }
+
+        function stopPushPoll() {
+            if (pushPollTimer) {
+                clearTimeout(pushPollTimer);
+                pushPollTimer = null;
+            }
+        }
+
+        function renderPushError(msg) {
+            const el = document.getElementById('pushResult');
+            el.style.display = 'block';
+            el.innerHTML = `<span style="color: #ef4444;">${esc(msg)}</span>`;
+        }
+
+        function applyPushState(job) {
+            pushLastJob = job;
+            const running = !!(job && job.status === 'running');
+            document.getElementById('batchPushBtn').disabled = running || !pushConfigured;
+            document.getElementById('cancelPushBtn').style.display = running ? '' : 'none';
+            const retryBtn = document.getElementById('retryPushBtn');
+            const hasUnfinished = !!(job && (job.failed + job.skipped) > 0);
+            retryBtn.style.display = (!running && hasUnfinished && pushConfigured) ? '' : 'none';
+        }
+
+        function resetPushProgress() {
+            ['pushSegOk', 'pushSegBad', 'pushSegSkip'].forEach(id => {
+                document.getElementById(id).style.width = '0%';
+            });
+            document.getElementById('pushProgressMeta').textContent = '';
+        }
+
+        function renderPushJob(job, items) {
+            const total = job.total || 0;
+            const pct = n => total > 0 ? (n * 100 / total) : 0;
+
+            document.getElementById('pushSegOk').style.width = pct(job.succeeded) + '%';
+            document.getElementById('pushSegBad').style.width = pct(job.failed) + '%';
+            document.getElementById('pushSegSkip').style.width = pct(job.skipped) + '%';
+
+            const LABELS = {
+                running: '推送中',
+                done: '已完成',
+                failed: '已停止',
+                canceled: '已取消',
+                interrupted: '被中断（服务重启后可续跑）',
+            };
+            const done = job.succeeded + job.failed + job.skipped;
+            document.getElementById('pushProgressText').textContent =
+                `${LABELS[job.status] || job.status} · ${done}/${total}`;
+
+            const bits = [`成功 ${job.succeeded}`];
+            if (job.failed) bits.push(`失败 ${job.failed}`);
+            if (job.skipped) bits.push(`跳过 ${job.skipped}`);
+            if (job.running) bits.push(`进行中 ${job.running}`);
+            if (job.status === 'running' && job.pending) bits.push(`待处理 ${job.pending}`);
+            bits.push(`并发 ${job.concurrency}`);
+            if (job.degraded) bits.push('已因失败率降级');
+            if (job.days) bits.push(`近 ${job.days} 天`);
+            document.getElementById('pushProgressMeta').textContent = bits.join(' · ');
+
+            renderPushFailures(items || []);
+        }
+
+        const PUSH_KIND_LABEL = {
+            credential: '凭证缺失',
+            skill_update: 'imaskai 需升级',
+            rate_limited: '被限流',
+            upstream_failed: 'IMA 业务错误',
+            invalid_url: 'URL 不合法',
+            timeout: '超时',
+            dependency: '依赖缺失',
+            script_failed: '推送失败',
+        };
+
+        function renderPushFailures(items) {
+            const failedItems = (items || []).filter(it => it.status === 'failed' || it.status === 'skipped');
+            const el = document.getElementById('pushFailures');
+            if (failedItems.length === 0) {
+                el.style.display = 'none';
+                return;
+            }
+            el.style.display = 'block';
+            const rows = failedItems.map(it => {
+                const kindLabel = PUSH_KIND_LABEL[it.kind] || it.kind || '未知';
+                const errMsg = it.error || '';
+                return `<tr><td>${esc(it.title)}</td><td>${esc(it.account)}</td><td><span class="kind-tag">${esc(kindLabel)}</span></td><td>${esc(errMsg)}</td></tr>`;
+            }).join('');
+            el.innerHTML = `
+                <h4 style="margin: 12px 0 8px; font-size: 13px; color: var(--text-tertiary);">失败条目（${failedItems.length}）</h4>
+                <table class="failure-table">
+                    <thead><tr><th>标题</th><th>公众号</th><th>分类</th><th>原因</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+        }
+
+        async function pollPushJob() {
+            if (!pushCurrentJobID) return;
+            try {
+                const resp = await apiFetch(`/api/v1/biz/admin/push/jobs/${pushCurrentJobID}?items=true`);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    stopPushPoll();
+                    renderPushError(data.error || '进度请求失败');
+                    return;
+                }
+                const job = data.job;
+                applyPushState(job);
+                renderPushJob(job, data.items || []);
+
+                if (job.status === 'running') {
+                    pushPollTimer = setTimeout(pollPushJob, PUSH_POLL_MS);
+                } else {
+                    document.getElementById('pushResult').style.display = 'block';
+                    document.getElementById('pushResult').innerHTML =
+                        `<strong>推送完成</strong> · 成功 ${job.succeeded} · 失败 ${job.failed} · 跳过 ${job.skipped}`;
+                    loadPushStatus();
+                }
+            } catch (e) {
+                stopPushPoll();
+                renderPushError('进度请求失败：' + e.message);
+            }
+        }
+
+        async function loadPushStatus() {
+            const el = document.getElementById('pushStatus');
+            try {
+                const resp = await apiFetch(`/api/v1/biz/admin/push/status?days=${pushDays()}`);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    el.textContent = data.error || '加载状态失败';
+                    return;
+                }
+                if (!data.configured) {
+                    pushConfigured = false;
+                    el.innerHTML = '<span style="color: #ef4444;">⚠ IMA 推送未配置。'
+                        + '请在 chatlog-server.json 中设置 ima_push_skill_dir 与 ima_push_kb_id</span>';
+                    applyPushState(pushLastJob);
+                    return;
+                }
+                pushConfigured = true;
+                let text = `已推送 <strong>${data.pushed}</strong> 篇`
+                    + ` · 近 ${data.days} 天待推送 <strong>${data.pending}</strong> 篇`;
+                if (data.blocked > 0) {
+                    text += ` · 其中 <strong style="color: #ef4444;">${data.blocked}</strong> 篇需人工处理`;
+                }
+                el.innerHTML = text;
+                applyPushState(pushLastJob);
+            } catch (e) {
+                el.textContent = '加载状态失败：' + e.message;
+            }
+        }
+
+        async function startPushJob() {
+            const days = pushDays();
+            const limit = parseInt(document.getElementById('pushLimit').value, 10) || 100;
+            if (!confirm(`将把最近 ${days} 天内最多 ${limit} 篇已归档但未推送的文章推送到 IMA 知识库。\n`
+                + '任务在服务端后台执行，关掉这个页面不会中断它。\n\n继续？')) return;
+
+            stopPushPoll();
+            document.getElementById('batchPushBtn').disabled = true;
+            document.getElementById('pushResult').style.display = 'none';
+            document.getElementById('pushFailures').style.display = 'none';
+            document.getElementById('pushProgress').style.display = 'block';
+            document.getElementById('pushProgressText').textContent = '正在创建任务…';
+            resetPushProgress();
+
+            try {
+                const resp = await apiFetch('/api/v1/biz/admin/push/jobs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ days, limit })
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    renderPushError(data.error || `创建任务失败（HTTP ${resp.status}）`);
+                    applyPushState(null);
+                    return;
+                }
+
+                const job = data.job;
+                pushCurrentJobID = job.id;
+                applyPushState(job);
+                renderPushJob(job, []);
+
+                if (job.status === 'running') {
+                    pushPollTimer = setTimeout(pollPushJob, PUSH_POLL_MS);
+                } else {
+                    document.getElementById('pushProgressText').textContent =
+                        `没有需要推送的文章（近 ${job.days} 天）`;
+                    document.getElementById('pushResult').style.display = 'block';
+                    document.getElementById('pushResult').innerHTML =
+                        `<strong>没有可推送的文章</strong> · 请先执行 MD 归档`;
+                    loadPushStatus();
+                }
+            } catch (e) {
+                renderPushError('请求失败：' + e.message);
+                applyPushState(null);
+            }
+        }
+
+        async function retryPushJob() {
+            if (!pushCurrentJobID) return;
+            if (!confirm('将把这次任务里所有没成功的文章重新推送一遍。\n\n继续？')) return;
+
+            stopPushPoll();
+            document.getElementById('retryPushBtn').disabled = true;
+            try {
+                const resp = await apiFetch(`/api/v1/biz/admin/push/jobs/${pushCurrentJobID}/retry`, { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    renderPushError(data.error || `重试失败（HTTP ${resp.status}）`);
+                    return;
+                }
+                document.getElementById('pushFailures').style.display = 'none';
+                document.getElementById('pushResult').style.display = 'none';
+                await pollPushJob();
+            } catch (e) {
+                renderPushError('重试请求失败：' + e.message);
+            } finally {
+                document.getElementById('retryPushBtn').disabled = false;
+            }
+        }
+
+        async function cancelPushJob() {
+            if (!confirm('取消当前推送任务？\n已经跑完的不会回退，还没跑的会保留下来，之后可以点「重试未成功项」继续。')) return;
+            try {
+                const resp = await apiFetch(`/api/v1/biz/admin/push/jobs/${pushCurrentJobID}/cancel`, { method: 'POST' });
+                if (!resp.ok) {
+                    const d = await resp.json().catch(() => ({}));
+                    renderPushError(d.error || '取消失败');
+                    return;
+                }
+                await pollPushJob();
+            } catch (e) {
+                renderPushError('取消请求失败：' + e.message);
+            }
+        }
+
+        async function restorePushJob() {
+            try {
+                const resp = await apiFetch('/api/v1/biz/admin/push/jobs?limit=1');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const job = data.items && data.items[0];
+                if (!job) return;
+
+                const nowSec = Math.floor(Date.now() / 1000);
+                const fresh = job.finishedAt > 0 && (nowSec - job.finishedAt) <= PUSH_SHOW_FINISHED_SECONDS;
+                if (job.status !== 'running' && !fresh) return;
+
+                pushCurrentJobID = job.id;
+                document.getElementById('pushProgress').style.display = 'block';
+                await pollPushJob();
+            } catch (e) {
+                // 恢复失败不影响正常使用
+            }
+        }
+
+        // 初始化推送卡：与 export 卡片对称
+        loadPushStatus();
+        restorePushJob();
 
         // --- 批量生成摘要 ---
         async function batchGenerateSummaries() {

@@ -98,7 +98,7 @@ chatlog chatstat --days 7 --top 20
 ```
 
 > 公众号归档不再有独立命令：在 Web 端「管理 → 批量任务」里一键导出。
-> 详见 [公众号归档功能说明](docs/biz2md.md)。
+> 详见 [公众号归档功能说明](docs/biz2md.md) 与 [IMA 知识库推送](docs/biz2ima.md)。
 
 ### Docker 部署
 

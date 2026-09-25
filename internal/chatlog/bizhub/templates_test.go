@@ -413,3 +413,60 @@ func TestExportWindowOptionsCoverBackendMax(t *testing.T) {
 		t.Error("缺少默认窗口 30 天")
 	}
 }
+
+// TestThemeToggleIsPresentAndConsistent 防止主题切换被改丢或改坏。
+//
+// 重点关注三个会静默默回退的点：
+//   1. 按钮从公共导航消失 → 三页同时丢；
+//   2. 防闪烁脚本被放到样式表后面 → 首帧先闪一帧错误底色；
+//   3. 暗色令牌又改回 @media(prefers-color-scheme:dark){ :root {...} } ——
+//      那会和 JS 显式设置的数据来源打架，出现「跟随系统」与「显式指定」无法区分的混乱。
+func TestThemeToggleIsPresentAndConsistent(t *testing.T) {
+	layout := readTemplate(t, "layout.html")
+
+	// 三页都引用公共导航，因此都会自动带上切换按钮。
+	for _, name := range pageFiles {
+		src := readTemplate(t, name)
+		if !strings.Contains(src, `{{template "top-nav"`) {
+			t.Errorf("%s 没有引用公共导航 top-nav", name)
+		}
+	}
+
+	// 按钮必须存在于公共导航里，且不要依赖外部 aria 标签文案——
+	// 这里只锁定 id 和控件语义，文案由 JS 写入，不属于模板必须包含的内容。
+	if !strings.Contains(layout, `id="themeToggle"`) {
+		t.Error("公共导航缺少主题切换按钮 id=themeToggle")
+	}
+	if !strings.Contains(layout, `<button`) || !strings.Contains(layout, `type="button"`) {
+		t.Error("themeToggle 必须是 <button type=\"button\">，否则键盘/可访问性会降级")
+	}
+
+	// 防闪烁脚本必须在样式表之前执行。
+	cssLink := `<link rel="stylesheet" href="/biz/static/bizhub.css">`
+	if !strings.Contains(layout, cssLink) {
+		t.Fatal("公共头部没有引入 bizhub.css")
+	}
+	scriptIdx := strings.Index(layout, `document.documentElement.dataset.theme`)
+	cssIdx := strings.Index(layout, cssLink)
+	if scriptIdx == -1 {
+		t.Error("公共头部缺少首帧防闪烁脚本")
+	} else if cssIdx != -1 && scriptIdx > cssIdx {
+		t.Error("防闪烁脚本必须在 bizhub.css 之前，否则首帧会闪")
+	}
+
+	// CSS 里只能用 [data-theme="dark"] 作为暗色令牌，不能再用 prefers-color-scheme。
+	// 原因已在 bizhub.css 注释里说明：要做三态，系统偏好必须先被 JS 解析成确定值。
+	cssSrc, err := staticFS.ReadFile("static/bizhub.css")
+	if err != nil {
+		t.Fatalf("读取 bizhub.css: %v", err)
+	}
+	css := string(cssSrc)
+	if !strings.Contains(css, `:root[data-theme="dark"]`) {
+		t.Error("bizhub.css 必须包含 :root[data-theme=\"dark\"] 暗色令牌")
+	}
+	// 允许 media query 出现在其它地方（如打印/移动端），但暗色令牌不能走它。
+	legacyDark := regexp.MustCompile(`@media\s*\(\s*prefers-color-scheme\s*:\s*dark\s*\)\s*\{\s*:root\s*\{`)
+	if legacyDark.MatchString(css) {
+		t.Error("bizhub.css 暗色令牌不能走 @media (prefers-color-scheme: dark) :root —— 与 JS 三态会冲突")
+	}
+}

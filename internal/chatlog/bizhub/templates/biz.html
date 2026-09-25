@@ -48,7 +48,12 @@
             color: #fff;
             border-color: var(--accent);
         }
-        .btn-ghost { background: transparent; }
+        .btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+        .btn-ghost {
+            background: transparent;
+            border-color: transparent;
+        }
+        .btn-ghost:hover { background: var(--accent-bg); color: var(--text); border-color: var(--border); }
         .btn-sm { padding: 5px 14px; font-size: 12px; }
 
         .search-box {
@@ -356,6 +361,29 @@
             font-variant-numeric: tabular-nums;
         }
         .digest-body { padding: 14px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
+        /* 每日精选 */
+        .daily-picks { display: flex; flex-direction: column; gap: 6px; padding: 10px 20px 16px; }
+        .daily-pick-item {
+            display: flex; gap: 10px; padding: 8px 12px;
+            border-radius: 6px; background: var(--accent-bg);
+            transition: background 0.15s;
+        }
+        .daily-pick-item:hover { background: var(--border-light); }
+        .pick-rank {
+            font-family: var(--font-serif);
+            font-size: 18px; font-weight: 700; line-height: 1.4;
+            min-width: 20px; text-align: center;
+        }
+        .pick-body { flex: 1; min-width: 0; }
+        .pick-title {
+            font-size: 14px; font-weight: 600; color: var(--text);
+            text-decoration: none; line-height: 1.5;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .pick-title:hover { color: var(--accent); }
+        .pick-meta { display: flex; gap: 8px; align-items: center; margin-top: 2px; font-size: 12px; color: var(--text-tertiary); }
+        .pick-score { font-weight: 600; font-size: 11px; }
+        .pick-reason { font-size: 12px; color: var(--text-secondary); margin-top: 2px; line-height: 1.5; }
         .digest-headline {
             font-family: var(--font-serif);
             font-size: 16px;
@@ -529,6 +557,8 @@
             background: linear-gradient(180deg, var(--accent-bg) 0%, var(--surface) 80px);
         }
         .article-card.hidden-by-filter { display: none; }
+        .article-card.is-read { opacity: 0.55; }
+        .article-card.is-read .article-title { font-weight: 400; }
         .article-title {
             font-family: var(--font-serif);
             font-size: 16px;
@@ -930,6 +960,10 @@
                     <span class="filter-chip" id="bookmarkFilterChip" onclick="toggleBookmarkFilter()" role="button" tabindex="0" aria-pressed="false">
                         <span class="star" id="bookmarkFilterStar">&#9734;</span>我的收藏
                     </span>
+                    <span class="filter-chip" id="unreadFilterBtn" onclick="toggleUnreadFilter()" role="button" tabindex="0" aria-pressed="false">
+                        只看未读
+                    </span>
+                    <button class="btn btn-ghost btn-sm" onclick="markAllAsRead()" title="把当前列表标为已读">全部已读</button>
                     <span class="filter-chips" id="filterChips"></span>
                     <span class="filter-count" id="filterCount"></span>
                 </div>
@@ -944,6 +978,21 @@
                     <button type="button" class="btn btn-ghost btn-sm" id="digestRefreshBtn" onclick="refreshDigest()">刷新</button>
                 </div>
                 <div id="digestContent"></div>
+            </div>
+
+            <!-- 每日精选 -->
+            <div class="digest-card" id="dailyDigestCard" hidden>
+                <div class="digest-head">
+                    <div>
+                        <div class="digest-title">📌 每日精选</div>
+                        <div class="digest-stats" id="dailyDigestStats">加载中…</div>
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <a href="/biz/sectors" class="btn btn-ghost btn-sm" title="板块看板">板块</a>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="loadDailyDigest(true)">刷新</button>
+                    </div>
+                </div>
+                <div id="dailyDigestContent"></div>
             </div>
 
             <div id="articleContainer"></div>
@@ -1085,6 +1134,7 @@
             if (selectedGHID) u += `&ghid=${encodeURIComponent(selectedGHID)}`;
             const d = effectiveWindow();
             if (d > 0) u += `&days=${d}`;
+            if (filterUnread) u += `&unread_only=true`;
             return u;
         }
 
@@ -1117,18 +1167,35 @@
                 head = `<div class="day-head" data-day="${key}">${esc(dayLabel(key))}</div>`;
             }
             const bookmarked = !!(a.bookmarked || a.Bookmarked);
+            const isRead = !!(a.isRead || a.is_read);
             const srcName = a.ghName || a.ghID || '';
             const src = srcName ? `<span class="meta-src">${esc(srcName)}</span><span class="meta-sep">·</span>` : '';
             const desc = a.description || a.Desc || '';
-            return `${head}<div class="article-card${bookmarked ? ' bookmarked' : ''}" data-id="${a.id}" data-ghid="${esc(a.ghID || '')}" data-bookmarked="${bookmarked ? '1' : '0'}">
+            return `${head}<div class="article-card${bookmarked ? ' bookmarked' : ''}${isRead ? ' is-read' : ''}" data-id="${a.id}" data-ghid="${esc(a.ghID || '')}" data-bookmarked="${bookmarked ? '1' : '0'}" data-read="${isRead ? '1' : '0'}">
                 <button type="button" class="bookmark-btn${bookmarked ? ' on' : ''}" data-id="${a.id}" onclick="toggleBookmark(this, event)" title="${bookmarked ? '取消收藏' : '收藏'}" aria-label="${bookmarked ? '取消收藏' : '收藏'}">${bookmarked ? '★' : '☆'}</button>
                 <div class="article-title"><a href="#" onclick="return openDrawerFromClick(event, ${a.id})">${esc(a.title) || '无标题'}</a></div>
                 ${desc ? `<div class="article-desc collapsed">${esc(desc)}</div><button type="button" class="article-desc-toggle hidden" onclick="toggleDesc(this, event)">展开全文</button>` : ''}
                 <div class="article-meta">${src}<span>${esc(formatDate(a.publishedAt))}</span>
                     <button type="button" class="btn-export-md" onclick="exportArticleMD(${a.id}, this)" title="导出为 Markdown">📄 MD</button>
+                    <button type="button" class="btn-push-ima" onclick="pushArticleToIMA(${a.id}, this)" title="${isExported(a) ? '推送到 IMA 知识库' : '需先 MD 归档才能推送'}"${isExported(a) ? '' : ' disabled'}>${isPushed(a) ? '✓ IMA' : '📤 IMA'}</button>
                     <button type="button" class="btn-gen-summary" onclick="generateArticleSummary(${a.id}, this)" title="生成摘要">🤖 摘要</button>
                 </div>
             </div>`;
+        }
+
+        // isExported 链式校验：status ∈ {exported, summary_generated} 才允许推送。
+        //
+        // 必须放在前端——用户看到按钮是否可点的来源，避免「按钮看起来能点、
+        // 点下去被后端 409」的体验偏差。
+        function isExported(a) {
+            const s = a.exportStatus || a.ExportStatus || '';
+            return s === 'exported' || s === 'summary_generated';
+        }
+
+        // isPushed 用于按钮文案：已推送的展示 ✓ IMA，让用户一眼看出历史。
+        function isPushed(a) {
+            const s = a.pushStatus || a.PushStatus || '';
+            return s === 'pushed';
         }
 
         function skeletonHTML() {
@@ -1371,6 +1438,7 @@
             syncAccountListFilter();
             document.getElementById('digestCard').hidden = mode !== 'digest';
             if (mode === 'digest') loadDigest();
+            loadDailyDigest(false);
         }
 
         document.getElementById('modeSeg').addEventListener('click', e => {
@@ -1541,8 +1609,64 @@
 
         function openDrawerFromClick(ev, id) {
             if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+            markArticleRead(id);
             openDrawer(id);
             return false;
+        }
+
+        /* ── 已读/未读 ── */
+        async function markArticleRead(id) {
+            const card = document.querySelector(`.article-card[data-id="${id}"]`);
+            if (!card || card.dataset.read === '1') return;
+            card.dataset.read = '1';
+            card.classList.add('is-read');
+            try {
+                await apiFetch(`/api/v1/biz/articles/${id}/read`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ isRead: true })
+                });
+            } catch (e) { /* 静默失败 */ }
+        }
+
+        let filterUnread = false;
+        function toggleUnreadFilter() {
+            filterUnread = !filterUnread;
+            const btn = document.getElementById('unreadFilterBtn');
+            if (btn) {
+                btn.classList.toggle('active', filterUnread);
+                btn.textContent = filterUnread ? '✓ 只看未读' : '只看未读';
+            }
+            // 前端快速过滤（已加载的文章）
+            document.querySelectorAll('.article-card').forEach(card => {
+                if (filterUnread && card.dataset.read === '1') {
+                    card.classList.add('hidden-by-filter');
+                } else {
+                    card.classList.remove('hidden-by-filter');
+                }
+            });
+            // 重新加载数据（后端过滤，翻页才准）
+            if (typeof reloadArticles === 'function') reloadArticles();
+        }
+
+        async function markAllAsRead() {
+            const ghid = selectedGHID || '';
+            const days = effectiveWindow() || 30;
+            if (!confirm(`确定把当前列表里的文章全部标记为已读？`)) return;
+            try {
+                await apiFetch('/api/v1/biz/articles/mark-read', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ghid, days })
+                });
+                document.querySelectorAll('.article-card').forEach(card => {
+                    card.dataset.read = '1';
+                    card.classList.add('is-read');
+                });
+                toast('已全部标记为已读', 'success');
+            } catch (e) {
+                toast('标记失败: ' + e.message, 'error');
+            }
         }
 
         /* ── 文章抽屉 ── */
@@ -1883,6 +2007,56 @@
                 const b = document.getElementById('digestRefreshBtn');
                 if (b) { b.disabled = false; b.textContent = '刷新'; }
             });
+        }
+
+        /* ── 每日精选 ── */
+        async function loadDailyDigest(fresh) {
+            const card = document.getElementById('dailyDigestCard');
+            const content = document.getElementById('dailyDigestContent');
+            const stats = document.getElementById('dailyDigestStats');
+            card.hidden = false;
+            stats.textContent = 'AI 挑选中…';
+            content.innerHTML = '';
+            try {
+                const url = '/api/v1/biz/daily-digest' + (fresh ? '?fresh=true' : '');
+                const resp = await apiFetch(url);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    stats.textContent = data.error || '加载失败';
+                    return;
+                }
+                renderDailyDigest(data.digest);
+            } catch (e) {
+                stats.textContent = '请求失败: ' + e.message;
+            }
+        }
+
+        function renderDailyDigest(d) {
+            const content = document.getElementById('dailyDigestContent');
+            const stats = document.getElementById('dailyDigestStats');
+            if (!d || !d.picks || d.picks.length === 0) {
+                stats.textContent = '暂无精选';
+                content.innerHTML = '';
+                return;
+            }
+            stats.textContent = d.headline || `${d.picks.length} 篇精选`;
+            let html = '<div class="daily-picks">';
+            d.picks.forEach((p, i) => {
+                const scoreColor = p.score >= 9 ? '#ef4444' : p.score >= 7 ? '#f59e0b' : '#6b7280';
+                html += `<div class="daily-pick-item">
+                    <span class="pick-rank" style="color:${scoreColor}">${i + 1}</span>
+                    <div class="pick-body">
+                        <a class="pick-title" href="${esc(p.url || '#')}" target="_blank" rel="noopener">${esc(p.title)}</a>
+                        <div class="pick-meta">
+                            <span class="pick-source">${esc(p.ghName)}</span>
+                            <span class="pick-score" style="color:${scoreColor}">${p.score}分</span>
+                        </div>
+                        <div class="pick-reason">${esc(p.reason)}</div>
+                    </div>
+                </div>`;
+            });
+            html += '</div>';
+            content.innerHTML = html;
         }
 
         /* ── 同步 ── */

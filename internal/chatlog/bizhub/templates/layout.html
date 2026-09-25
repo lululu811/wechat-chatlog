@@ -15,10 +15,28 @@
 */}}
 
 {{/* doc-head: 字体 + 公共样式表。各页紧跟 <title> 之后引用，
-     且必须排在页面 <style> 之前 —— 页面内联规则要能就近覆盖公共样式表。 */}}
+     且必须排在页面 <style> 之前 —— 页面内联规则要能就近覆盖公共样式表。
+
+     主题脚本为什么内联在这里、且必须排在样式表之前：
+       它负责在首帧之前把 data-theme 打到 <html> 上（取值来自 localStorage，
+       或「跟随系统」时的系统偏好）。等外链 CSS 加载完再决定主题就会先闪一帧
+       错误底色，这是主题切换最常见也最显眼的缺陷。内联 + 前置是唯一解，
+       所以这段脚本不进 bizhub.js —— 那个文件是页面末尾加载的，太晚了。 */}}
 {{define "doc-head"}}
+    <meta name="color-scheme" content="light dark">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+    (function () {
+        // 隐私模式下 localStorage 存取会抛异常，所以整段包在 try 里。
+        // 拿不到存储就退化成「跟随系统」，而不是崩在这儿让页面停在错误的底色上。
+        var pref = 'auto';
+        try { pref = localStorage.getItem('bizhub-theme') || 'auto'; } catch (e) {}
+        var dark = pref === 'dark' ||
+            (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    })();
+    </script>
     <link rel="stylesheet" href="/biz/static/bizhub.css">
 {{end}}
 
@@ -31,5 +49,9 @@
         <a class="top-tab{{if eq . "admin"}} active{{end}}" data-tab="admin" href="/biz/admin">管理</a>
         <span class="top-tab-spacer"></span>
         <a class="top-tab" href="/" title="返回 chatlog 聊天记录页">chatlog</a>
+        <button class="theme-toggle" id="themeToggle" type="button" title="切换白天 / 夜晚">
+            <span class="theme-icon" aria-hidden="true"></span>
+            <span class="theme-label"></span>
+        </button>
     </nav>
 {{end}}

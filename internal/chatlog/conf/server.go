@@ -26,6 +26,10 @@ type ServerConfig struct {
 	MDExportDir             string   `mapstructure:"md_export_dir"`
 	MDExportScript          string   `mapstructure:"md_export_script"`
 	MDExportConcurrency     int      `mapstructure:"md_export_concurrency"`
+	IMAPushSkillDir         string   `mapstructure:"ima_push_skill_dir"`
+	IMAPushKBID             string   `mapstructure:"ima_push_kb_id"`
+	IMAPushFolderID         string   `mapstructure:"ima_push_folder_id"`
+	IMAPushConcurrency      int      `mapstructure:"ima_push_concurrency"`
 	Webhook                 *Webhook `mapstructure:"webhook"`
 }
 
@@ -120,6 +124,33 @@ func (c *ServerConfig) GetMDExportScript() string {
 // 抓取摊到可接受的总时长，再往上收益很小而风险陡增。
 func (c *ServerConfig) GetMDExportConcurrency() int {
 	return c.MDExportConcurrency
+}
+
+// GetIMAPushSkillDir 返回 imaskai skill 路径；空字符串表示推送功能未启用。
+//
+// imaskai 是 chatlog 复用 IMA OpenAPI 凭证与错误协议的客户端 —— 不绕过它直接
+// 调 ima.qq.com，就不必在这里存凭证（凭证由 imaskai 自己从 ~/.config/ima/ 或
+// 环境变量读取，chatlog 不持有）。
+func (c *ServerConfig) GetIMAPushSkillDir() string {
+	return c.IMAPushSkillDir
+}
+
+// GetIMAPushKBID 返回 IMA 知识库 ID；空字符串表示推送功能未启用。
+func (c *ServerConfig) GetIMAPushKBID() string {
+	return c.IMAPushKBID
+}
+
+// GetIMAPushFolderID 返回 IMA 文件夹 ID；空字符串时调用方回退到 KB ID（= 根目录）。
+func (c *ServerConfig) GetIMAPushFolderID() string {
+	return c.IMAPushFolderID
+}
+
+// GetIMAPushConcurrency 返回批量推送并发数；<=0 时调用方回退到默认 3，上限 8。
+//
+// 与 MD 归档同款：超过 8 的并发收益很小（IMA 单批最多 10 URL，串行分批才是常态），
+// 风险陡增（110021 频控会更频繁触发）。
+func (c *ServerConfig) GetIMAPushConcurrency() int {
+	return c.IMAPushConcurrency
 }
 
 func (c *ServerConfig) GetWebhook() *Webhook {

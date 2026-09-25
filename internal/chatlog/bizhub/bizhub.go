@@ -10,12 +10,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/sjzar/chatlog/internal/chatlog/bizhub/imapush"
 	"github.com/sjzar/chatlog/internal/chatlog/bizhub/mdexport"
 	"github.com/sjzar/chatlog/internal/wechatdb"
 )
@@ -30,6 +32,11 @@ type Config interface {
 	GetMDExportScript() string
 	// GetMDExportConcurrency 批量归档并发数；<=0 时调用方回退到默认 3，上限 8
 	GetMDExportConcurrency() int
+	// IMA 推送（v1）
+	GetIMAPushSkillDir() string
+	GetIMAPushKBID() string
+	GetIMAPushFolderID() string
+	GetIMAPushConcurrency() int
 }
 
 // Service 公众号文章汇总服务
@@ -38,7 +45,8 @@ type Service struct {
 	syncer   *Syncer
 	workDir  string
 	config   Config
-	exporter *mdexport.Exporter // lazy init
+	exporter *mdexport.Exporter    // lazy init
+	pusher   *imapush.Exporter    // lazy init
 
 	mu         sync.RWMutex
 	syncing    bool
@@ -55,6 +63,13 @@ type Service struct {
 	activeJob string
 	jobCancel context.CancelFunc
 	jobCtx    context.Context
+
+	// 推送任务编排。与归档任务独立的并发槽位 —— push 候选集是「已 export」，
+	// 不会跟 export 抢资源；同时跑一个 export + 一个 push 是允许的。
+	pushJobMu     sync.Mutex
+	activePushJob string
+	pushJobCancel context.CancelFunc
+	pushJobCtx    context.Context
 
 	// bgCtx 是任务级上下文：批量归档在 HTTP 请求返回之后继续跑，所以不能挂
 	// 在请求的 ctx 上（请求结束就会取消）。页面关掉、用户走人都不该打断归档。
@@ -102,9 +117,10 @@ func (s *Service) refreshLightCache() {
 	s.tags = tags
 }
 
-// Start 启动服务（先修复上次残留的归档任务，再后台执行全量同步）
+// Start 启动服务（先修复上次残留的归档/推送任务，再后台执行全量同步）
 func (s *Service) Start() {
 	s.resumeInterruptedExportJobs()
+	s.resumeInterruptedPushJobs()
 
 	go func() {
 		log.Info().Msg("bizhub: starting full sync")
@@ -241,6 +257,22 @@ func (s *Service) ToggleArticleBookmark(id int64, bookmarked bool) error {
 	return s.store.SetArticlesBookmarked([]int64{id}, bookmarked)
 }
 
+// MarkArticleRead 标记单篇文章已读/未读
+func (s *Service) MarkArticleRead(id int64, read bool) error {
+	return s.store.SetArticlesRead([]int64{id}, read)
+}
+
+// BatchMarkRead 批量标记文章已读。ids 非空时按 ID 列表；否则按 ghid+days 范围。
+func (s *Service) BatchMarkRead(ids []int64, ghid string, days int) (int64, error) {
+	if len(ids) > 0 {
+		if err := s.store.SetArticlesRead(ids, true); err != nil {
+			return 0, err
+		}
+		return int64(len(ids)), nil
+	}
+	return s.store.MarkAllRead(ghid, days)
+}
+
 // ListSummaries 获取汇总列表（不含正文）
 func (s *Service) ListSummaries() ([]Summary, error) {
 	return s.store.ListSummaries()
@@ -263,9 +295,20 @@ func (s *Service) ListArticles(ghid string, days, limit, offset int) ([]Article,
 	return s.store.ListArticles(ArticleFilter{GHID: ghid, Days: days, Limit: limit, Offset: offset})
 }
 
+// ListArticlesWithFilter 按完整过滤条件取文章（含未读筛选）
+func (s *Service) ListArticlesWithFilter(f ArticleFilter) ([]Article, error) {
+	return s.store.ListArticles(f)
+}
+
 // CountListArticles 与 ListArticles 同条件的总数，查询失败时返回 0
 func (s *Service) CountListArticles(ghid string, days int) int {
 	n, _ := s.store.CountListArticles(ArticleFilter{GHID: ghid, Days: days})
+	return n
+}
+
+// CountListArticlesWithFilter 按完整过滤条件统计总数
+func (s *Service) CountListArticlesWithFilter(f ArticleFilter) int {
+	n, _ := s.store.CountListArticles(f)
 	return n
 }
 
@@ -751,6 +794,156 @@ func (s *Service) GenerateFeedSummary(ctx context.Context, windowDays int, llm *
 		ComputedAt: now,
 		FromCache:  false,
 	}, nil
+}
+
+// --- 每日精选 ---
+
+const dailyDigestSystemPrompt = "你是公众号内容编辑。用户会给你一份关注的微信公众号最近发布的文章列表（仅含标题、公众号名、发布时间、摘要、链接，无正文）。" +
+	"你的任务：从中精选 5-10 篇最值得读的文章。\n" +
+	"输出严格 JSON（不要输出任何其他文字），格式如下：\n" +
+	"{\"headline\":\"一句话概括今天的信息焦点\",\"picks\":[{\"id\":数字,\"title\":\"标题\",\"source\":\"公众号名\",\"reason\":\"为什么值得读，20-40字\",\"score\":数字1到10}]}\n" +
+	"其中 id 必须与输入文章中 [id=数字] 的数字完全一致。\n" +
+	"挑选标准：信息密度高、对投资决策或行业认知有启发、时效性强。避免纯营销、纯转发、内容单薄的文章。\n" +
+	"picks 按 score 降序排列。只从给定列表中选，不要编造。"
+
+// GenerateDailyDigest 生成今日精选。
+// fresh=true 跳过缓存强制重新生成；否则如果今天已有精选且文章没大变，直接返回。
+func (s *Service) GenerateDailyDigest(ctx context.Context, llm *LLMClient, fresh bool) (*DailyDigest, error) {
+	if llm == nil {
+		return nil, ErrLLMNotConfigured
+	}
+
+	today := time.Now().Format("2006-01-02")
+
+	// 缓存：今天已有精选且不超过 4 小时 → 直接返回
+	if !fresh {
+		existing, err := s.store.GetDailyDigest(today)
+		if err == nil && existing != nil && time.Now().Unix()-existing.ComputedAt < 4*3600 {
+			return existing, nil
+		}
+	}
+
+	// 取最近 24 小时的 watched 文章，最多 50 篇
+	since := time.Now().Add(-24 * time.Hour)
+	articles, err := s.store.GetWatchedArticlesSince(since, 50)
+	if err != nil {
+		return nil, err
+	}
+	if len(articles) == 0 {
+		return nil, ErrNoWatchedArticles
+	}
+
+	// 构建 prompt
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("以下是我关注的公众号在最近 24 小时内发布的 %d 篇文章：\n\n", len(articles)))
+	for i, a := range articles {
+		desc := a.Desc
+		if runes := []rune(desc); len(runes) > 150 {
+			desc = string(runes[:150])
+		}
+		sb.WriteString(fmt.Sprintf("%d. [id=%d] 【%s】%s\n   发布: %s | 摘要: %s\n   链接: %s\n\n",
+			i+1, a.ID, a.GHName, a.Title,
+			time.Unix(a.PublishedAt, 0).Format("15:04"),
+			desc, a.URL))
+	}
+
+	text, _, _, err := llm.CompleteWithSystem(ctx, dailyDigestSystemPrompt, sb.String())
+	if err != nil {
+		return nil, err
+	}
+
+	// 解析 JSON
+	structured, ok := ParseStructured(text)
+	if !ok {
+		log.Warn().Str("raw", text[:min(len(text), 800)]).Msg("bizhub: daily digest LLM output not JSON")
+		return nil, ErrNotJSON
+	}
+
+	// 提取 headline 和 picks
+	var result struct {
+		Headline string `json:"headline"`
+		Picks    []struct {
+			ID     int64  `json:"id"`
+			Title  string `json:"title"`
+			Source string `json:"source"`
+			Reason string `json:"reason"`
+			Score  int    `json:"score"`
+		} `json:"picks"`
+	}
+	if err := json.Unmarshal(structured, &result); err != nil {
+		log.Warn().Str("raw", text[:min(len(text), 500)]).Msg("bizhub: daily digest JSON parse failed")
+		return nil, ErrNotJSON
+	}
+
+	// 建立 article ID → article 的映射（用于补全 URL 等信息）
+	articleMap := make(map[int64]Article)
+	for _, a := range articles {
+		articleMap[a.ID] = a
+	}
+
+	picks := make([]DigestPick, 0, len(result.Picks))
+	articleIDs := make([]int64, 0, len(result.Picks))
+	for _, p := range result.Picks {
+		a := articleMap[p.ID]
+		pick := DigestPick{
+			ArticleID: p.ID,
+			Title:     p.Title,
+			GHName:    p.Source,
+			Reason:    p.Reason,
+			Score:     p.Score,
+		}
+		if a.URL != "" {
+			pick.URL = a.URL
+		}
+		if pick.Title == "" {
+			pick.Title = a.Title
+		}
+		if pick.GHName == "" {
+			pick.GHName = a.GHName
+		}
+		picks = append(picks, pick)
+		articleIDs = append(articleIDs, p.ID)
+	}
+
+	// 落库
+	if err := s.store.UpsertDailyDigest(today, result.Headline, picks, articleIDs); err != nil {
+		log.Warn().Err(err).Msg("bizhub: save daily digest failed")
+	}
+
+	digest, _ := s.store.GetDailyDigest(today)
+	if digest == nil {
+		digest = &DailyDigest{
+			DigestDate: today,
+			Headline:   result.Headline,
+			Picks:      picks,
+			ArticleIDs: articleIDs,
+			ComputedAt: time.Now().Unix(),
+		}
+	}
+	return digest, nil
+}
+
+// --- 板块看板 ---
+
+// SectorSummary 板块聚合数据
+type SectorSummary struct {
+	TagID       int64     `json:"tagId"`
+	TagName     string    `json:"tagName"`
+	Color       string    `json:"color"`
+	ArticleCount int      `json:"articleCount"`
+	TopArticles []Article `json:"topArticles"`
+}
+
+// GetSectorDashboard 按标签聚合 watched 账号的近期文章热度
+func (s *Service) GetSectorDashboard(days int) ([]SectorSummary, error) {
+	return s.store.GetSectorDashboard(days)
+}
+
+// --- 文章时间线 ---
+
+// SearchTimeline 按关键词搜索 watched 账号文章，时间排序
+func (s *Service) SearchTimeline(keyword string, days, limit int) ([]Article, int, error) {
+	return s.store.SearchTimeline(keyword, days, limit)
 }
 
 // --- MD 导出相关 ---
@@ -1429,10 +1622,684 @@ func newExportJobID() string {
 	return "job_" + time.Now().Format("20060102T150405") + "_" + hex.EncodeToString(b[:])
 }
 
+// --- IMA 推送 任务化 ---
+
+// PushBatchRequest 建任务请求（与 ExportBatchRequest 镜像）
+type PushBatchRequest struct {
+	Days  int      `json:"days"`
+	Limit int      `json:"limit"`
+	GHIDs []string `json:"ghIDs"`
+}
+
+// pushItemTimeout 单批推送超时。import_urls 单批 1-10 URL，IMA 端处理
+// 通常 5-15 秒；超时设 60 秒与 imapush.Exporter 默认 Timeout 一致。
+const pushItemTimeout = 60 * time.Second
+
+// defaultPushConcurrency 默认并发数（与 export 同 3）
+const defaultPushConcurrency = 3
+
+// ErrPushNotConfigured 推送功能未配置
+var ErrPushNotConfigured = errors.New("IMA 推送未配置：请先设置 ima_push_skill_dir 与 ima_push_kb_id")
+
+// ErrPushJobRunning 已有推送任务在跑
+var ErrPushJobRunning = errors.New("已有推送任务正在运行，请等它结束或先取消")
+
+// ErrPushJobNotFound 推送任务不存在
+var ErrPushJobNotFound = errors.New("推送任务不存在")
+
+// pushConcurrency 取配置的推送并发数；<=0 时回退默认 3，上限 8。
+func (s *Service) pushConcurrency() int {
+	if s.config == nil {
+		return defaultPushConcurrency
+	}
+	c := s.config.GetIMAPushConcurrency()
+	if c <= 0 {
+		c = defaultPushConcurrency
+	}
+	if c > 8 {
+		c = 8
+	}
+	return c
+}
+
+// ActivePushJob 当前在跑的推送任务 ID（无任务时返回空字符串）
+func (s *Service) ActivePushJob() string {
+	s.pushJobMu.Lock()
+	defer s.pushJobMu.Unlock()
+	return s.activePushJob
+}
+
+// ValidatePushWindow 校验推送窗口天数，与 ValidateExportWindow 同款（共用上限 365 天）。
+func ValidatePushWindow(days int) (int, error) {
+	if days <= 0 {
+		return 30, nil
+	}
+	if days > maxExportWindowDays {
+		return 0, fmt.Errorf("%w：最多 %d 天，收到 %d 天", ErrInvalidExportWindow, maxExportWindowDays, days)
+	}
+	return days, nil
+}
+
+// StartPushJob 创建并启动批量推送任务，立即返回任务快照。
+func (s *Service) StartPushJob(req PushBatchRequest) (*PushJob, error) {
+	if !s.IsPushConfigured() {
+		return nil, ErrPushNotConfigured
+	}
+	// 先占位再建任务（与 StartExportJob 同款逻辑）
+	if s.ActivePushJob() != "" {
+		return nil, ErrPushJobRunning
+	}
+
+	days, err := ValidatePushWindow(req.Days)
+	if err != nil {
+		return nil, err
+	}
+	req.Days = days
+	if req.Limit <= 0 {
+		req.Limit = 100
+	}
+	if req.Limit > 1000 {
+		req.Limit = 1000
+	}
+
+	items, err := s.buildPushPlan(req)
+	if err != nil {
+		return nil, err
+	}
+
+	job := &PushJob{
+		ID:          newExportJobID(), // 复用同一 ID 格式：前缀 job_ 即表明是哪类任务
+		Status:      ExportJobRunning,
+		Days:        req.Days,
+		MaxItems:    req.Limit,
+		Concurrency: s.pushConcurrency(),
+		Total:       len(items),
+	}
+	if len(items) == 0 {
+		job.Status = ExportJobDone
+		job.FinishedAt = time.Now().Unix()
+	}
+
+	if err := s.store.CreatePushJob(job, items); err != nil {
+		return nil, err
+	}
+	if len(items) > 0 {
+		s.launchPushJob(job.ID)
+	}
+	return s.store.GetPushJob(job.ID)
+}
+
+// buildPushPlan 把候选文章转成推送任务条目。
+//
+// 链式约束在 PushCandidateWhere 已表达：未 export 成功的不会出现在 articles 里。
+// 这里只决定「该不该跳」（永久失败 / 重试用尽）。
+func (s *Service) buildPushPlan(req PushBatchRequest) ([]PushJobItem, error) {
+	articles, err := s.store.GetPushableArticles(req.Days, req.Limit)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(req.GHIDs) > 0 {
+		ghidSet := make(map[string]struct{}, len(req.GHIDs))
+		for _, ghid := range req.GHIDs {
+			ghidSet[ghid] = struct{}{}
+		}
+		filtered := articles[:0]
+		for _, a := range articles {
+			if _, ok := ghidSet[a.GHID]; ok {
+				filtered = append(filtered, a)
+			}
+		}
+		articles = filtered
+	}
+	if len(articles) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]int64, len(articles))
+	for i, a := range articles {
+		ids[i] = a.ID
+	}
+	records, err := s.store.GetExportRecordsByArticleIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]PushJobItem, 0, len(articles))
+	for _, a := range articles {
+		it := PushJobItem{
+			JobID:     "", // 会在 CreatePushJob 阶段填上
+			ArticleID: a.ID,
+			Title:     a.Title,
+			Account:   a.GHName,
+			Status:    ExportItemPending,
+		}
+		rec := records[a.ID]
+		if rec != nil && rec.PushedStatus == PushStatusFailed {
+			kind := imapush.ParseKind(rec.PushKind)
+			switch {
+			case kind.NeedsHuman():
+				it.Status = ExportItemSkipped
+				it.Kind = string(kind)
+				it.Error = "需人工处理：" + kind.Label()
+			case rec.PushAttempts >= maxPushAttempts:
+				it.Status = ExportItemSkipped
+				it.Kind = string(kind)
+				it.Error = fmt.Sprintf("已自动重试 %d 次仍失败，已停止自动重试", rec.PushAttempts)
+			}
+		}
+		items = append(items, it)
+	}
+	return items, nil
+}
+
+// GetPushJob 读任务详情
+func (s *Service) GetPushJob(id string, withItems bool) (*PushJob, []PushJobItem, error) {
+	job, err := s.store.GetPushJob(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if job == nil {
+		return nil, nil, ErrPushJobNotFound
+	}
+	if !withItems {
+		return job, nil, nil
+	}
+	items, err := s.store.ListPushJobItems(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if items == nil {
+		items = []PushJobItem{}
+	}
+	return job, items, nil
+}
+
+// ListPushJobs 读最近的任务列表
+func (s *Service) ListPushJobs(limit int) ([]*PushJob, error) {
+	jobs, err := s.store.ListPushJobs(limit)
+	if err != nil {
+		return nil, err
+	}
+	if jobs == nil {
+		jobs = []*PushJob{}
+	}
+	return jobs, nil
+}
+
+// RetryPushJob 重试任务里未成功的条目
+func (s *Service) RetryPushJob(id string) (*PushJob, error) {
+	job, err := s.store.GetPushJob(id)
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, ErrPushJobNotFound
+	}
+	if job.Status == ExportJobRunning {
+		return nil, ErrExportJobRunning
+	}
+
+	if _, err := s.store.RequeuePushJobUnfinished(id); err != nil {
+		return nil, err
+	}
+	s.launchPushJob(id)
+	return s.store.GetPushJob(id)
+}
+
+// CancelPushJob 取消任务
+func (s *Service) CancelPushJob(id string) error {
+	s.pushJobMu.Lock()
+	if s.activePushJob == id {
+		if s.pushJobCancel != nil {
+			s.pushJobCancel()
+		}
+		s.pushJobMu.Unlock()
+		return nil
+	}
+	s.pushJobMu.Unlock()
+
+	// 不在跑：直接标 canceled
+	return s.store.SetPushJobStatus(id, ExportJobCanceled, "用户取消", true)
+}
+
+// GetPushStatus 推送统计
+func (s *Service) GetPushStatus(days int) (*PushStats, error) {
+	return s.store.GetPushStats(days)
+}
+
+// resumeInterruptedPushJobs 启动时修复并续跑上次残留的推送任务
+func (s *Service) resumeInterruptedPushJobs() {
+	ids, err := s.store.MarkInterruptedPushJobs()
+	if err != nil {
+		log.Warn().Err(err).Msg("bizhub: 推送任务状态修复失败")
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	if !s.IsPushConfigured() {
+		log.Warn().Int("jobs", len(ids)).
+			Msg("bizhub: 有推送任务因重启中断，但 IMA 推送未配置，暂不续跑")
+		return
+	}
+	id := ids[0]
+	log.Info().Str("jobID", id).Int("interrupted", len(ids)).
+		Msg("bizhub: 检测到中断的推送任务，正在续跑")
+	s.launchPushJob(id)
+}
+
+// launchPushJob 在后台跑任务。push 与 export 是独立的并发槽位 —— 用户可以
+// 同时跑一个 export + 一个 push（push 候选是"已 export"，不会跟 export 撞资源）。
+func (s *Service) launchPushJob(jobID string) {
+	s.pushJobMu.Lock()
+	if s.activePushJob != "" {
+		s.pushJobMu.Unlock()
+		log.Warn().Str("jobID", jobID).Str("active", s.activePushJob).
+			Msg("bizhub: 已有推送任务在运行，跳过本次启动")
+		return
+	}
+	ctx, cancel := context.WithCancel(s.bgCtx)
+	s.activePushJob = jobID
+	s.pushJobCancel = cancel
+	s.pushJobCtx = ctx
+	s.pushJobMu.Unlock()
+
+	if err := s.store.SetPushJobStatus(jobID, ExportJobRunning, "", false); err != nil {
+		log.Warn().Err(err).Str("jobID", jobID).Msg("bizhub: 重置推送任务状态失败")
+	}
+
+	go func() {
+		defer func() {
+			s.releasePushJob(jobID)
+			cancel()
+		}()
+		s.runPushJob(ctx, jobID)
+	}()
+}
+
+// runPushJob 推送任务主循环。
+//
+// 与 runExportJob 形状一致：分块并发执行，按失败率降级，按"全是永久失败"熔断。
+// 唯一差异是失败分类用 imapush.FailureKind 而不是 mdexport.FailureKind。
+func (s *Service) runPushJob(ctx context.Context, jobID string) {
+	exp, err := s.getPushExporter()
+	if err != nil {
+		_ = s.store.SetPushJobStatus(jobID, ExportJobFailed, err.Error(), true)
+		return
+	}
+
+	job, err := s.store.GetPushJob(jobID)
+	if err != nil || job == nil {
+		log.Error().Err(err).Str("jobID", jobID).Msg("bizhub: 加载推送任务失败")
+		return
+	}
+
+	all, err := s.store.ListPushJobItems(jobID)
+	if err != nil {
+		_ = s.store.SetPushJobStatus(jobID, ExportJobFailed, err.Error(), true)
+		return
+	}
+	var work []PushJobItem
+	for _, it := range all {
+		if it.Status == ExportItemPending {
+			it.JobID = jobID // 注入任务 ID，runPushItem 的 logPushFailure 会用
+			work = append(work, it)
+		}
+	}
+
+	concurrency := job.Concurrency
+	if concurrency <= 0 {
+		concurrency = defaultPushConcurrency
+	}
+	degraded := job.Degraded
+
+	succeeded, failed := 0, 0
+	aborted := false
+	var failedKinds []imapush.FailureKind
+
+	for i := 0; i < len(work); {
+		if ctx.Err() != nil {
+			break
+		}
+		end := i + concurrency
+		if end > len(work) {
+			end = len(work)
+		}
+		chunk := work[i:end]
+		i = end
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var chunkKinds []imapush.FailureKind
+
+		for _, it := range chunk {
+			wg.Add(1)
+			go func(it PushJobItem) {
+				defer wg.Done()
+				res := s.runPushItem(ctx, exp, it)
+				mu.Lock()
+				switch res.Status {
+				case ExportItemDone:
+					succeeded++
+				case ExportItemFailed:
+					failed++
+					chunkKinds = append(chunkKinds, imapush.ParseKind(res.Kind))
+				}
+				mu.Unlock()
+			}(it)
+		}
+		wg.Wait()
+
+		failedKinds = append(failedKinds, chunkKinds...)
+
+		processed := succeeded + failed
+		if !degraded && processed >= exportDegradeMinSamples &&
+			float64(failed)/float64(processed) >= exportDegradeFailRate {
+			concurrency = 1
+			degraded = true
+			_ = s.store.SetPushJobConcurrency(jobID, concurrency, true)
+			log.Warn().Str("jobID", jobID).
+				Int("processed", processed).Int("failed", failed).
+				Msg("bizhub: 推送失败率偏高，并发已降级为 1")
+		}
+
+		// 熔断：整块全是永久失败（凭证 / skill 升级 / 上游 KB 错） → 停手
+		if shouldAbortPushChunk(chunkKinds) {
+			aborted = true
+			remaining := work[i:]
+			for _, it := range remaining {
+				it.Status = ExportItemSkipped
+				it.Kind = string(imapush.KindCredential)
+				it.Error = "连续触发永久失败，本轮已暂停；处理后点「重试」继续"
+				_ = s.store.UpdatePushJobItem(it)
+			}
+			log.Error().Str("jobID", jobID).Int("skipped", len(remaining)).
+				Msg("bizhub: 推送触发熔断，剩余条目已暂停")
+			break
+		}
+	}
+
+	status, msg := ExportJobDone, ""
+	switch {
+	case ctx.Err() != nil:
+		status, msg = ExportJobCanceled, "任务已被取消"
+	case aborted:
+		status = ExportJobFailed
+		msg = "连续触发永久失败，本轮已暂停；处理后点「重试」继续"
+	case failed > 0 && succeeded == 0:
+		status = ExportJobFailed
+		if label := dominantPushKindLabel(failedKinds); label != "" {
+			msg = "全部条目推送失败：" + label + "，处理后点「重试」继续"
+		} else {
+			msg = "全部条目推送失败"
+		}
+	}
+
+	s.releasePushJob(jobID)
+
+	if err := s.store.SetPushJobStatus(jobID, status, msg, true); err != nil {
+		log.Warn().Err(err).Str("jobID", jobID).Msg("bizhub: 更新推送任务状态失败")
+	}
+	log.Info().Str("jobID", jobID).Str("status", status).
+		Int("succeeded", succeeded).Int("failed", failed).Msg("bizhub: 推送任务结束")
+}
+
+// releasePushJob 释放并发名额（幂等）
+func (s *Service) releasePushJob(jobID string) {
+	s.pushJobMu.Lock()
+	defer s.pushJobMu.Unlock()
+	if s.activePushJob == jobID {
+		s.activePushJob = ""
+		s.pushJobCancel = nil
+		s.pushJobCtx = nil
+	}
+}
+
+// runPushItem 推送单篇，并把结果写回条目与归档记录
+//
+// it.JobID 由 runPushJob 在切片前注入 —— 这里不能再覆盖，否则 UpdatePushJobItem
+// 的 WHERE job_id=? 条件会匹配 0 行（job_id 为空串），导致所有 runPushItem
+// 的状态更新（包括 "running → failed"）都 silently no-op。
+// 这是个一踩就碎的细节，但属于数据正确性而非性能优化，所以放在醒目位置。
+func (s *Service) runPushItem(ctx context.Context, exp *imapush.Exporter, it PushJobItem) PushJobItem {
+	it.Status = ExportItemRunning
+	it.Kind = ""
+	it.Error = ""
+	_ = s.store.UpdatePushJobItem(it)
+
+	article, err := s.store.GetArticle(it.ArticleID)
+	if err != nil || article == nil {
+		it.Status = ExportItemSkipped
+		it.Error = "文章已不存在（可能已被重新同步移除）"
+		_ = s.store.UpdatePushJobItem(it)
+		return it
+	}
+
+	itemCtx, cancel := context.WithTimeout(ctx, pushItemTimeout)
+	defer cancel()
+
+	results, err := exp.Push(itemCtx, []string{article.URL})
+	if err != nil {
+		kind := imapush.KindOf(err)
+		it.Status = ExportItemFailed
+		it.Kind = string(kind)
+		it.Error = err.Error()
+		logPushFailure(it.ArticleID, it.JobID, err)
+		_ = s.store.UpdatePushJobItem(it)
+		// 进程层失败：所有 URL 都按同一 kind 失败；本批只有 1 个 URL，按其处理。
+		_ = s.store.UpsertPushRecord(article.ID, "", PushStatusFailed, string(kind), err.Error())
+		return it
+	}
+
+	if len(results) == 0 {
+		it.Status = ExportItemFailed
+		it.Kind = string(imapush.KindUnknown)
+		it.Error = "推送器未返回结果"
+		_ = s.store.UpdatePushJobItem(it)
+		return it
+	}
+
+	r := results[0]
+	if r.Kind != "" {
+		// 业务层失败
+		it.Status = ExportItemFailed
+		it.Kind = string(r.Kind)
+		it.Error = r.RetMsg
+		_ = s.store.UpdatePushJobItem(it)
+		_ = s.store.UpsertPushRecord(article.ID, "", PushStatusFailed, string(r.Kind), r.RetMsg)
+		return it
+	}
+
+	it.Status = ExportItemDone
+	it.MediaID = r.MediaID
+	_ = s.store.UpdatePushJobItem(it)
+	_ = s.store.UpsertPushRecord(article.ID, r.MediaID, PushStatusPushed, "", "")
+	return it
+}
+
+// shouldAbortPushChunk 判断这一块结果是否触发熔断（推送版）
+func shouldAbortPushChunk(kinds []imapush.FailureKind) bool {
+	if len(kinds) < 2 {
+		return false
+	}
+	for _, k := range kinds {
+		if !k.NeedsHuman() {
+			return false
+		}
+	}
+	return true
+}
+
+// dominantPushKindLabel 所有失败都是同一类时给出该类的中文标签
+func dominantPushKindLabel(kinds []imapush.FailureKind) string {
+	if len(kinds) == 0 {
+		return ""
+	}
+	first := kinds[0]
+	for _, k := range kinds {
+		if k != first {
+			return ""
+		}
+	}
+	return first.Label()
+}
+
 // IsExportConfigured 返回 MD 导出是否已配置
 func (s *Service) IsExportConfigured() bool {
 	if s.config == nil {
 		return false
 	}
 	return s.config.GetMDExportScript() != "" && s.config.GetMDExportDir() != ""
+}
+
+// IsPushConfigured 返回 IMA 推送是否已配置。
+//
+// 比 IsExportConfigured 更严：不仅要 KB ID 非空，还要 skill_dir 真实存在
+// ima_api.cjs（空路径或路径错都应该被视作未启用，避免 push handler 启动后
+// 才报 dependency 错）。
+func (s *Service) IsPushConfigured() bool {
+	if s.config == nil {
+		return false
+	}
+	skillDir := s.config.GetIMAPushSkillDir()
+	kbID := s.config.GetIMAPushKBID()
+	if skillDir == "" || kbID == "" {
+		return false
+	}
+	// 检查 imaskai 是否真实可用 —— 缺这个会让 push 启动时直接报 dependency 错，
+	// 在 IsPushConfigured 这一层就该拦下。
+	apiPath := skillDir + "/ima_api.cjs"
+	if _, err := os.Stat(apiPath); err != nil {
+		return false
+	}
+	return true
+}
+
+// IsArticleExported 链式校验：文章是否已经 MD 归档成功。
+//
+// status IN ('exported', 'summary_generated') 视为已归档；
+// 状态为 'failed' 或没有记录都视为未归档。
+//
+// 这是 push 候选集的唯一判定点 —— 单篇 handler 与 buildPushPlan 共用，
+// 避免「页面说能 push、点下去报错」的静默偏差。
+func (s *Service) IsArticleExported(articleID int64) (bool, error) {
+	return s.store.IsArticleExported(articleID)
+}
+
+// --- IMA 推送相关 ---
+
+// getPushExporter 懒初始化推送器（依赖 config）。
+//
+// 与 getExporter 同思路：lazy init 让"未启用"和"启用但配置错"两种状态都
+// 在第一次 PushArticle 调用时才暴露，避免启动期硬依赖配置。
+func (s *Service) getPushExporter() (*imapush.Exporter, error) {
+	if s.pusher != nil {
+		return s.pusher, nil
+	}
+	if s.config == nil {
+		return nil, fmt.Errorf("imapush: config not set")
+	}
+	skillDir := s.config.GetIMAPushSkillDir()
+	kbID := s.config.GetIMAPushKBID()
+	if skillDir == "" || kbID == "" {
+		return nil, fmt.Errorf("imapush: ima_push_skill_dir and ima_push_kb_id must be configured")
+	}
+	folderID := s.config.GetIMAPushFolderID()
+	exp, err := imapush.New(imapush.Config{
+		SkillDir:        skillDir,
+		KnowledgeBaseID: kbID,
+		FolderID:        folderID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.pusher = exp
+	return exp, nil
+}
+
+// PushArticleResult 单篇推送结果
+type PushArticleResult struct {
+	ArticleID int64  `json:"articleID"`
+	Title     string `json:"title"`
+	Account   string `json:"account"`
+	URL       string `json:"url"`
+	MediaID   string `json:"mediaID"`
+	Status    string `json:"status"`
+	Duration  string `json:"duration"`
+}
+
+// ErrArticleNotExported 推送的链式前置校验失败：文章未 export 成功。
+//
+// 单篇 handler 与 buildPushPlan 都用 errors.Is(err, ErrArticleNotExported) 判断，
+// 403/409 状态码由此 error 触发。把它做成 exported error 是为了不让字符串错误
+// 在调用方传话时丢语义。
+var ErrArticleNotExported = errors.New("imapush: article has not been exported yet")
+
+// PushArticle 推送单篇文章到 IMA。
+//
+// 链式前置：调用方（handler / 批量任务）已校验 IsArticleExported，
+// 本方法不再重复校验 —— 复用这条 contract 是为了不让同一语义在校验链上
+// 散在多处。
+func (s *Service) PushArticle(ctx context.Context, articleID int64) (*PushArticleResult, error) {
+	article, err := s.store.GetArticle(articleID)
+	if err != nil {
+		return nil, err
+	}
+	if article == nil {
+		return nil, fmt.Errorf("article not found: %d", articleID)
+	}
+
+	exp, err := s.getPushExporter()
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := exp.PushOne(ctx, article.URL)
+	if err != nil {
+		kind := imapush.KindOf(err)
+		// 进程层失败：不知道 article 是否真的进了 IMA，全部按失败记
+		_ = s.store.UpsertPushRecord(articleID, "", PushStatusFailed, string(kind), err.Error())
+		logPushFailure(articleID, "", err)
+		return nil, err
+	}
+
+	if result.Kind != "" {
+		// 业务层失败（ret_code != 0 或整批级业务错误）
+		_ = s.store.UpsertPushRecord(articleID, "", PushStatusFailed, string(result.Kind), result.RetMsg)
+		return nil, &imapush.PushError{Kind: result.Kind, Msg: result.RetMsg}
+	}
+
+	// 成功
+	if err := s.store.UpsertPushRecord(articleID, result.MediaID, PushStatusPushed, "", ""); err != nil {
+		log.Warn().Err(err).Int64("articleID", articleID).Msg("bizhub: upsert push record failed")
+	}
+
+	return &PushArticleResult{
+		ArticleID: articleID,
+		Title:     article.Title,
+		Account:   article.GHName,
+		URL:       article.URL,
+		MediaID:   result.MediaID,
+		Status:    PushStatusPushed,
+		Duration:  result.Duration.String(),
+	}, nil
+}
+
+// logPushFailure 把推送失败的 stderr 摘要写进服务日志（不进库）。
+//
+// 与 logExportFailure 同款：界面只显示一行分类，但服务日志要保留 stderr 原文
+// 方便排查 imaskai / 凭证 / 网络错。
+func logPushFailure(articleID int64, jobID string, err error) {
+	ev := log.Warn().Int64("articleID", articleID).
+		Str("kind", string(imapush.KindOf(err)))
+	if jobID != "" {
+		ev = ev.Str("jobID", jobID)
+	}
+	var pe *imapush.PushError
+	if errors.As(err, &pe) {
+		ev = ev.Int("exitCode", pe.ExitCode).
+			Str("stderr", tailLines(pe.Stderr, exportLogStderrLines))
+	}
+	ev.Msg("bizhub: 推送失败详情")
 }

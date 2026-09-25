@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>板块看板 · 公众号</title>
+{{template "doc-head"}}
+    <style>
+        :root {
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .sectors-page {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 28px 20px 80px;
+            color: var(--text);
+            font-family: var(--font-sans);
+        }
+
+        /* ── header ── */
+        .sectors-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            gap: 16px;
+        }
+        .sectors-header-left { flex: 1; min-width: 0; }
+
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            color: var(--text-tertiary);
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 400;
+            transition: color 0.15s;
+            margin-bottom: 4px;
+        }
+        .back-link:hover { color: var(--accent); }
+
+        .sectors-title {
+            font-family: var(--font-serif);
+            font-size: 22px;
+            font-weight: 700;
+            line-height: 1.3;
+        }
+        .sectors-subtitle {
+            font-size: 13px;
+            color: var(--text-tertiary);
+            margin-top: 3px;
+        }
+
+        /* ── seg control（复刻 bizhub.css 样式，确保独立页面生效）── */
+        .seg-control {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--surface);
+            flex-shrink: 0;
+            margin-top: 6px;
+        }
+        .seg-control .seg-btn {
+            padding: 5px 14px;
+            font-size: 12px;
+            font-family: var(--font-sans);
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            border-right: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-secondary);
+            transition: background 0.15s, color 0.15s;
+        }
+        .seg-control .seg-btn:last-child { border-right: none; }
+        .seg-control .seg-btn.active {
+            background: var(--accent);
+            color: #fff;
+        }
+        .seg-control .seg-btn:hover:not(.active) {
+            background: var(--accent-bg);
+        }
+
+        /* ── grid ── */
+        .sector-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        /* ── card ── */
+        .sector-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: var(--shadow);
+            transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s;
+        }
+        .sector-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lift);
+            border-color: var(--border-light);
+        }
+
+        .sector-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .sector-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .sector-name {
+            font-weight: 600;
+            font-size: 14px;
+            flex: 1;
+            color: var(--text);
+        }
+        .sector-count {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-tertiary);
+            background: var(--accent-bg, rgba(128,128,128,0.08));
+            padding: 2px 8px;
+            border-radius: 10px;
+            white-space: nowrap;
+        }
+
+        .sector-articles {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .sector-article {
+            font-size: 13px;
+            line-height: 1.55;
+            display: -webkit-box;
+            -webkit-line-clamp: 1;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .sector-article a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: color 0.15s;
+        }
+        .sector-article a:hover { color: var(--accent); }
+        .sector-article .sa-src {
+            color: var(--text-tertiary);
+            font-size: 12px;
+            margin-right: 5px;
+            flex-shrink: 0;
+        }
+
+        /* ── empty ── */
+        .empty-sectors {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-tertiary);
+            font-size: 14px;
+        }
+
+        /* ─ responsive ── */
+        @media (max-width: 640px) {
+            .sectors-page { padding: 16px 12px 60px; }
+            .sectors-header { flex-direction: column; }
+            .sector-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="sectors-page">
+        <div class="sectors-header">
+            <div class="sectors-header-left">
+                <a href="/biz" class="back-link">← 返回动态</a>
+                <div class="sectors-title">板块看板</div>
+                <div class="sectors-subtitle" id="sectorsSubtitle">加载中…</div>
+            </div>
+            <div class="seg-control" id="daysSeg"></div>
+        </div>
+        <div id="sectorGrid" class="sector-grid"></div>
+    </div>
+
+    <script src="/biz/static/bizhub.js"></script>
+    <script>
+        function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+        let currentDays = 7;
+
+        function initDaysSeg() {
+            const seg = document.getElementById('daysSeg');
+            const options = [{v:7,l:'7 天'},{v:14,l:'14 天'},{v:30,l:'30 天'}];
+            seg.innerHTML = options.map(o =>
+                `<button class="seg-btn${o.v===currentDays?' active':''}" data-days="${o.v}">${o.l}</button>`
+            ).join('');
+            seg.addEventListener('click', e => {
+                const btn = e.target.closest('.seg-btn');
+                if (!btn) return;
+                currentDays = parseInt(btn.dataset.days);
+                seg.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b === btn));
+                loadSectors();
+            });
+        }
+
+        async function loadSectors() {
+            const grid = document.getElementById('sectorGrid');
+            const subtitle = document.getElementById('sectorsSubtitle');
+            grid.innerHTML = '<div class="empty-sectors">加载中…</div>';
+            try {
+                const resp = await apiFetch(`/api/v1/biz/sectors?days=${currentDays}`);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    grid.innerHTML = `<div class="empty-sectors">${esc(data.error || '加载失败')}</div>`;
+                    return;
+                }
+                renderSectors(data.sectors, data.days);
+            } catch (e) {
+                grid.innerHTML = `<div class="empty-sectors">请求失败: ${esc(e.message)}</div>`;
+            }
+        }
+
+        function renderSectors(sectors, days) {
+            const grid = document.getElementById('sectorGrid');
+            const subtitle = document.getElementById('sectorsSubtitle');
+            if (!sectors || sectors.length === 0) {
+                grid.innerHTML = '<div class="empty-sectors">近期没有关注账号的文章</div>';
+                subtitle.textContent = `近 ${days} 天`;
+                return;
+            }
+            const totalArticles = sectors.reduce((s, sec) => s + sec.articleCount, 0);
+            subtitle.textContent = `近 ${days} 天 · ${sectors.length} 个板块 · ${totalArticles} 篇文章`;
+
+            grid.innerHTML = sectors.map(sec => {
+                const articles = (sec.topArticles || []).slice(0, 4).map(a =>
+                    `<div class="sector-article"><span class="sa-src">${esc(a.ghName)}</span><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a></div>`
+                ).join('');
+                return `<div class="sector-card">
+                    <div class="sector-head">
+                        <span class="sector-dot" style="background:${sec.color}"></span>
+                        <span class="sector-name">${esc(sec.tagName)}</span>
+                        <span class="sector-count">${sec.articleCount} 篇</span>
+                    </div>
+                    <div class="sector-articles">${articles}</div>
+                </div>`;
+            }).join('');
+        }
+
+        initDaysSeg();
+        loadSectors();
+    </script>
+</body>
+</html>
