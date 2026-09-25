@@ -30,6 +30,11 @@ type ServerConfig struct {
 	IMAPushKBID             string   `mapstructure:"ima_push_kb_id"`
 	IMAPushFolderID         string   `mapstructure:"ima_push_folder_id"`
 	IMAPushConcurrency      int      `mapstructure:"ima_push_concurrency"`
+	// Pipeline worker（PR1）。控制 chatlog server 模式下后台是否自动推进
+	// 文章的 fetch → mdexport → summarize → imapush 流水线。
+	BizWorkerEnabled        bool     `mapstructure:"biz_worker_enabled"`
+	BizWorkerInterval       int      `mapstructure:"biz_worker_interval"`        // 秒
+	BizWorkerBatchSize      int      `mapstructure:"biz_worker_batch_size"`
 	Webhook                 *Webhook `mapstructure:"webhook"`
 }
 
@@ -151,6 +156,32 @@ func (c *ServerConfig) GetIMAPushFolderID() string {
 // 风险陡增（110021 频控会更频繁触发）。
 func (c *ServerConfig) GetIMAPushConcurrency() int {
 	return c.IMAPushConcurrency
+}
+
+// GetBizWorkerEnabled 返回是否启用 pipeline 后台 worker。
+//
+// 默认 false：迁移期不自动推进，避免对未配置好的 mdexport / imapush 自动跑
+// 出大量失败记录。用户明确设 true 才开启。
+func (c *ServerConfig) GetBizWorkerEnabled() bool {
+	return c.BizWorkerEnabled
+}
+
+// GetBizWorkerInterval 返回 worker ticker 间隔（秒）。
+//
+// <=0 时 Worker 回退到默认 300s（5 分钟）。想更激进可以调小到 60，但频率高时
+// mp.weixin.qq.com 抓限流会更敏感。
+func (c *ServerConfig) GetBizWorkerInterval() int {
+	return c.BizWorkerInterval
+}
+
+// GetBizWorkerBatchSize 返回每 tick 最多处理的文章数。
+//
+// <=0 时 Worker 回退到默认 20。worker 是单 goroutine 串行推进，
+// batch=20 / interval=300s 意味着稳态每 5 分钟推 20 篇 —— 受 stage 实际
+// 耗时（fetch ~3s、mdexport ~30s、summarize ~10s、imapush ~5s）影响，
+// 真实吞吐会比这个上限低。
+func (c *ServerConfig) GetBizWorkerBatchSize() int {
+	return c.BizWorkerBatchSize
 }
 
 func (c *ServerConfig) GetWebhook() *Webhook {

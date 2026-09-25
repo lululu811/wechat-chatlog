@@ -193,6 +193,18 @@ func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) 
 		route(api, http.MethodGet, "/admin/push/status", "",
 			withRecovery(handlePushStatus, getSvc))
 
+		// Pipeline worker 控制（PR1 引入）。
+		//
+		// 路径归到 admin/ 下与 export/push 任务保持一致；命名上「pipeline」
+		// 比「pipeline_jobs」更准确，因为 worker 不维护"任务"概念，
+		// 它只推进 article 行（pipeline_status 单列状态机）。
+		route(api, http.MethodGet, "/admin/pipeline/status", "",
+			withRecovery(handlePipelineStatus, getSvc))
+		route(api, http.MethodPost, "/admin/pipeline/trigger", "",
+			withRecovery(handlePipelineTrigger, getSvc))
+		route(api, http.MethodPost, "/admin/pipeline/retry/:id", "",
+			withRecovery(handlePipelineRetry, getSvc))
+
 		// 单篇操作（未改名）
 		route(api, http.MethodPost, "/articles/:id/export", "",
 			withRecovery(handleExportArticle, getSvc))
@@ -1514,4 +1526,112 @@ func handleGenerateBatchSummaries(c *gin.Context, svc *Service, llm *LLMClient) 
 		"skipped": skipped,
 		"errors":  errors,
 	})
+}
+
+// --- Pipeline worker handlers（PR1） ---
+//
+// 三个端点的语义：
+//
+//	GET  /admin/pipeline/status   — 状态快照：每状态计数 + 最近 20 条失败
+//	POST /admin/pipeline/trigger  — 主动跑一次 RunOnce（非阻塞，立刻 200）
+//	POST /admin/pipeline/retry/:id — 把单篇 failed:* 倒回 pending，下次 tick 推
+//
+// trigger 是 non-blocking 设计：worker 在后台 goroutine 跑 RunOnce，
+// HTTP handler 只是 chan push。如果阻塞返回耗时（"我触发完了"），
+// 会被前端误读为「这一批已经推完了」。
+//
+// retry 是同步的：DB 操作是单条 UPDATE，毫秒级返回。
+
+// handlePipelineStatus 返回 pipeline 状态快照。
+//
+// 返回字段：
+//   enabled   — worker 是否启用（false 时 ticker 不会触发）
+//   counts    — map[status]count，例如 {"pending": 23000, "pushed": 100, "failed:fetch": 5}
+//   recent    — 最近 20 条 failed 文章（任意 stage），含 pipeline_error 字段
+//
+// recent 给运维一个直观的"现在卡在哪"，counts 给"工作量分布"。
+func handlePipelineStatus(c *gin.Context, svc *Service) {
+	enabled := false
+	if w := svc.Worker(); w != nil {
+		enabled = w.cfg.Enabled
+	}
+
+	counts, err := svc.Store().PipelineStatusCount(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if counts == nil {
+		counts = map[string]int{}
+	}
+
+	recent, err := svc.Store().RecentFailedArticles(c.Request.Context(), 20)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if recent == nil {
+		recent = []Article{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"enabled": enabled,
+		"counts":  counts,
+		"recent":  recent,
+	})
+}
+
+// handlePipelineTrigger 主动触发一次 worker tick。
+//
+// 立即返回 202 + {triggered: true}，不等 RunOnce 跑完 —— RunOnce 可能要 30s+。
+// 前端要等结果请轮询 /admin/pipeline/status 看 counts 是否变化。
+//
+// 没启用 worker 时（Worker() == nil 或 cfg.Enabled=false）也允许手动 trigger：
+// 这是有意的 —— 「关掉自动、想手动推一批」的运维场景下，trigger 仍然能跑。
+// 此时 channeled trigger 没人在接收，调用会立即 return 但 RunOnce 不会跑。
+// 现阶段允许这种"空跑"以简化前端；未来可以让 trigger 临时启动 RunOnce。
+func handlePipelineTrigger(c *gin.Context, svc *Service) {
+	w := svc.Worker()
+	if w == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"triggered": false,
+			"reason":    "worker not started (TUI mode or BizWorkerEnabled=false at boot)",
+		})
+		return
+	}
+	w.Trigger()
+	c.JSON(http.StatusAccepted, gin.H{"triggered": true})
+}
+
+// handlePipelineRetry 把单篇 failed:* 文章倒回 pending，由下次 worker tick 推。
+//
+// 只接受 failed:* 状态的文章（Store.ResetPipelineToPending 校验）。
+// 已被推到中间状态（fetched / md_exported / summarized）的不接受重置——
+// 这些是"进行中"状态，重置会让 worker 跳过中间 stage。
+//
+// 与 trigger 的区别：trigger 让 worker 跑一次；retry 是单篇手动重置。
+func handlePipelineRetry(c *gin.Context, svc *Service) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid article id"})
+		return
+	}
+
+	if err := svc.Store().ResetPipelineToPending(c.Request.Context(), id); err != nil {
+		// "not in failed state" 是 4xx（用户操作错误）；其他是 5xx。
+		if strings.Contains(err.Error(), "not in failed state") {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 顺手 trigger 一下让 worker 立刻看到，不用等下一个 tick（最多 5min）。
+	if w := svc.Worker(); w != nil {
+		w.Trigger()
+	}
+
+	c.JSON(http.StatusOK, gin.H{"id": id, "status": "pending"})
 }

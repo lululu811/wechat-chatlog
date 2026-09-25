@@ -37,6 +37,19 @@ type Config interface {
 	GetIMAPushKBID() string
 	GetIMAPushFolderID() string
 	GetIMAPushConcurrency() int
+	// LLM 客户端构造参数（worker.summarizeStage 需要）。
+	// 由 Config 实现：ctx.Context 返回 TUI 内存配置；conf.ServerConfig 返回
+	// 持久化的 server 配置。两边都返回空字符串时 worker 会跑、summarize stage
+	// 立刻报 "llm not configured" 并写 failed:summarize（不致命，可以重试）。
+	GetLLMBaseURL() string
+	GetLLMAPIKey() string
+	GetLLMModel() string
+	// Pipeline Worker（PR1）
+	GetBizWorkerEnabled() bool
+	// GetBizWorkerInterval 返回 ticker 间隔（秒）。<=0 时 Worker 回退到默认 300s。
+	GetBizWorkerInterval() int
+	// GetBizWorkerBatchSize 返回每 tick 处理的最多文章数。<=0 时 Worker 回退到默认 20。
+	GetBizWorkerBatchSize() int
 }
 
 // Service 公众号文章汇总服务
@@ -47,6 +60,15 @@ type Service struct {
 	config   Config
 	exporter *mdexport.Exporter    // lazy init
 	pusher   *imapush.Exporter    // lazy init
+
+	// llm 是 LLM 客户端（summarize stage 需要）。由外部在 SetConfig 之后
+	// 调 SetLLM 注入；为空时 summarize stage 立刻报 "llm not configured"，
+	// 其他 stage 不受影响（fetch / mdexport / imapush 不需要 LLM）。
+	llm *LLMClient
+
+	// worker 是 PR1 引入的 pipeline 后台推进器。在 Start() 末尾启动，
+	// Stop() 开头停。Config nil 或 BizWorkerEnabled=false 时不启动。
+	worker *Worker
 
 	mu         sync.RWMutex
 	syncing    bool
@@ -117,7 +139,11 @@ func (s *Service) refreshLightCache() {
 	s.tags = tags
 }
 
-// Start 启动服务（先修复上次残留的归档/推送任务，再后台执行全量同步）
+// Start 启动服务（先修复上次残留的归档/推送任务，再后台执行全量同步，再启动 pipeline worker）
+//
+// Worker 启动放在 sync 之后：第一次 sync 会写入大量新行（pipeline_status='pending'），
+// worker 立刻开始推会与 sync 撞上同一批文章的 status。sync 完成后 worker 起来，
+// 顺序更可预测。
 func (s *Service) Start() {
 	s.resumeInterruptedExportJobs()
 	s.resumeInterruptedPushJobs()
@@ -127,21 +153,32 @@ func (s *Service) Start() {
 		result, err := s.SyncAll()
 		if err != nil {
 			log.Error().Err(err).Msg("bizhub: full sync failed")
-			return
-		}
-		log.Info().
-			Int("accounts", len(result.Accounts)).
-			Int("totalArticles", result.TotalArticles).
-			Int("newArticles", result.NewArticles).
-			Msg("bizhub: full sync completed")
+		} else {
+			log.Info().
+				Int("accounts", len(result.Accounts)).
+				Int("totalArticles", result.TotalArticles).
+				Int("newArticles", result.NewArticles).
+				Msg("bizhub: full sync completed")
 
-		s.refreshLightCache()
-		s.InitTags()
+			s.refreshLightCache()
+			s.InitTags()
+		}
+
+		// sync 完成（不论成败）再起 worker —— sync 失败时 worker 仍然有用，
+		// 至少能把失败前已经写入的少数行推下去。
+		s.startPipelineWorker()
 	}()
 }
 
-// Stop 停止服务（先取消在跑的归档任务，再关库）
+// Stop 停止服务（先停 pipeline worker → 取消在跑的归档任务 → 取消推送任务 → 关库）
+//
+// 顺序很重要：worker 是周期性抓批、可能正在写 stage，必须先停避免新推进；
+// 然后再取消归档/推送长任务；最后关库。
 func (s *Service) Stop() error {
+	if s.worker != nil {
+		s.worker.Stop()
+		s.worker = nil
+	}
 	s.CancelExportJob()
 	if s.bgCancel != nil {
 		s.bgCancel()
@@ -149,9 +186,65 @@ func (s *Service) Stop() error {
 	return s.store.Close()
 }
 
+// startPipelineWorker 根据 Config 构造并启动 Worker。
+//
+// 从 Config 读 Enabled / Interval / BatchSize，三者都缺省有合理回退（见 NewWorker）。
+// 想要"迁移期不开 Worker"的运维场景：把 BizWorkerEnabled 设为 false 即可。
+//
+// LLM 在这里按需构造：worker.summarizeStage 需要 LLM；外部（http.Service / manager）
+// 已经构造过 LLM 并 SetLLM 进来的话就复用；否则从 Config 读 api_key 自造。
+// 重复构造的成本只是一个 LLMClient 结构体（stateless HTTP client），接受这个微小
+// 的重复以换取 wiring 的简单。
+func (s *Service) startPipelineWorker() {
+	if s.config == nil {
+		log.Info().Msg("bizhub: pipeline worker skipped (no config)")
+		return
+	}
+
+	if s.llm == nil && s.config.GetLLMAPIKey() != "" {
+		s.llm = NewLLMClient(
+			s.config.GetLLMBaseURL(),
+			s.config.GetLLMAPIKey(),
+			s.config.GetLLMModel(),
+		)
+	}
+
+	cfg := WorkerConfig{
+		Enabled: s.config.GetBizWorkerEnabled(),
+	}
+	if d := s.config.GetBizWorkerInterval(); d > 0 {
+		cfg.Interval = time.Duration(d) * time.Second
+	}
+	if b := s.config.GetBizWorkerBatchSize(); b > 0 {
+		cfg.Batch = b
+	}
+
+	s.worker = NewWorker(s, cfg)
+	s.worker.Start(s.bgCtx)
+}
+
 // SetConfig 注入可选配置源（用于 summary 抓取/LLM 调用的覆写）。可传 nil。
 func (s *Service) SetConfig(cfg Config) {
 	s.config = cfg
+}
+
+// SetLLM 注入 LLM 客户端（summarize stage 用）。
+//
+// 必须在 Start() 之前调用；调用后 summarize stage 才会有 LLM 可用。
+// 多次调用以最后一次为准。
+func (s *Service) SetLLM(llm *LLMClient) {
+	s.llm = llm
+}
+
+// LLM 返回注入的 LLM 客户端（可能被 worker / handler 调用）。
+func (s *Service) LLM() *LLMClient {
+	return s.llm
+}
+
+// Worker 返回 pipeline worker。给 handler 用来 Trigger / 拿配置。
+// worker 为 nil 表示 worker 未启动（比如 TUI 模式），handler 应自行判断。
+func (s *Service) Worker() *Worker {
+	return s.worker
 }
 
 // Store 返回底层 store

@@ -188,6 +188,16 @@ func (c *stubPushConfig) GetIMAPushKBID() string          { return c.kbID }
 func (c *stubPushConfig) GetIMAPushFolderID() string      { return c.folderID }
 func (c *stubPushConfig) GetIMAPushConcurrency() int      { return c.pushCC }
 
+// LLM（PR1 pipeline worker 需要）—— 测试 stub 不构造真实 LLM
+func (c *stubPushConfig) GetLLMBaseURL() string { return "" }
+func (c *stubPushConfig) GetLLMAPIKey() string  { return "" }
+func (c *stubPushConfig) GetLLMModel() string   { return "" }
+
+// Pipeline worker（PR1）—— 测试 stub 默认不启用
+func (c *stubPushConfig) GetBizWorkerEnabled() bool   { return false }
+func (c *stubPushConfig) GetBizWorkerInterval() int   { return 0 }
+func (c *stubPushConfig) GetBizWorkerBatchSize() int  { return 0 }
+
 func getFirstArticleID(t *testing.T, svc *Service) int64 {
 	t.Helper()
 	rec, err := svc.store.ListArticles(ArticleFilter{Limit: 1})

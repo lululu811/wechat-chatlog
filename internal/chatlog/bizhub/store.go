@@ -1,10 +1,12 @@
 package bizhub
 
 import (
+	"context"
 	"crypto/md5"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -64,6 +66,15 @@ type Article struct {
 	// 前端用这两个字段决定按钮 disabled / 高亮。空字符串 = 没有归档记录。
 	ExportStatus string `json:"exportStatus,omitempty"` // exported / summary_generated / failed / ""
 	PushStatus   string `json:"pushStatus,omitempty"`   // pushed / push_failed / ""
+
+	// Pipeline 状态机字段。Worker 推进时改这些，前端展示用。
+	// 5 阶段正态：pending → fetched → md_exported → summarized → pushed
+	// 失败态：failed:fetch / failed:mdexport / failed:summarize / failed:imapush
+	// 详见 pipeline.go 的状态常量定义。
+	PipelineStatus     string `json:"pipelineStatus,omitempty"`
+	PipelineError      string `json:"pipelineError,omitempty"`
+	PipelineAttempt    int    `json:"pipelineAttempt,omitempty"`
+	PipelineUpdatedAt  int64  `json:"pipelineUpdatedAt,omitempty"`
 }
 
 // Summary 关注公众号文章的 LLM 汇总
@@ -476,6 +487,40 @@ CREATE INDEX IF NOT EXISTS idx_export_job_items_status ON biz_export_job_items(j
 		}
 	}
 
+	// Pipeline 状态机字段（PR1 引入）。
+	//
+	// pipeline_status 默认 'pending'：所有未处理的文章（包括迁移前已存在的
+	// 23822 条）都会被 Worker 第一次 tick 捡起来跑一遍 —— 这是显式选择，
+	// 让 Worker 重新建立可信的产物基础，不依赖历史不完整的 biz_exported_articles 记录。
+	// 想「迁移不重抓」的用户可以把 BizWorkerEnabled 关掉、或者把 status 手动
+	// 改成 'pushed' 后再开 Worker。
+	if !artCols["pipeline_status"] {
+		if _, err := s.db.Exec(`ALTER TABLE biz_articles ADD COLUMN pipeline_status TEXT NOT NULL DEFAULT 'pending'`); err != nil {
+			return err
+		}
+	}
+	if !artCols["pipeline_error"] {
+		if _, err := s.db.Exec(`ALTER TABLE biz_articles ADD COLUMN pipeline_error TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !artCols["pipeline_attempt"] {
+		if _, err := s.db.Exec(`ALTER TABLE biz_articles ADD COLUMN pipeline_attempt INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !artCols["pipeline_updated_at"] {
+		if _, err := s.db.Exec(`ALTER TABLE biz_articles ADD COLUMN pipeline_updated_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
+	// Pipeline 状态机索引：Worker 按 (status, updated_at ASC) 拉候选，
+	// 走这个复合索引能避免全表扫描 23000+ 行。
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_articles_pipeline ON biz_articles(pipeline_status, pipeline_updated_at)`); err != nil {
+		return err
+	}
+
 	// biz_summaries 渐进式列扩展（PRAGMA 检测，不存在则 ALTER）
 	sumCols := make(map[string]bool)
 	sumRows, err := s.db.Query(`PRAGMA table_info(biz_summaries)`)
@@ -818,7 +863,9 @@ type ArticleFilter struct {
 const articleRows = `
 	SELECT a.id, a.gh_id, COALESCE(acc.gh_name, ''), a.title, a.description, a.url,
 	       a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
-	       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+	       COALESCE(e.status, ''), COALESCE(e.pushed_status, ''),
+	       COALESCE(a.pipeline_status, ''), COALESCE(a.pipeline_error, ''),
+	       COALESCE(a.pipeline_attempt, 0), COALESCE(a.pipeline_updated_at, 0)
 	FROM biz_articles a
 	LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 	LEFT JOIN biz_exported_articles e ON a.id = e.article_id`
@@ -851,7 +898,7 @@ func scanArticles(rows *sql.Rows) ([]Article, error) {
 	for rows.Next() {
 		var a Article
 		var bookmarked, isRead int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus, &a.PipelineStatus, &a.PipelineError, &a.PipelineAttempt, &a.PipelineUpdatedAt); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
@@ -914,12 +961,14 @@ func (s *Store) GetArticle(id int64) (*Article, error) {
 	err := s.db.QueryRow(`
 		SELECT a.id, a.gh_id, COALESCE(acc.gh_name, ''), a.title, a.description, a.url,
 		       a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
-		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, ''),
+		       COALESCE(a.pipeline_status, ''), COALESCE(a.pipeline_error, ''),
+		       COALESCE(a.pipeline_attempt, 0), COALESCE(a.pipeline_updated_at, 0)
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
 		WHERE a.id = ?
-	`, id).Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus)
+	`, id).Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus, &a.PipelineStatus, &a.PipelineError, &a.PipelineAttempt, &a.PipelineUpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -945,7 +994,9 @@ func (s *Store) SearchArticles(keyword string, limit, offset int) ([]Article, er
 
 	rows, err := s.db.Query(`
 		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
-		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, ''),
+		       COALESCE(a.pipeline_status, ''), COALESCE(a.pipeline_error, ''),
+		       COALESCE(a.pipeline_attempt, 0), COALESCE(a.pipeline_updated_at, 0)
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
@@ -963,7 +1014,7 @@ func (s *Store) SearchArticles(keyword string, limit, offset int) ([]Article, er
 	for rows.Next() {
 		var a Article
 		var bookmarked, isRead int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus, &a.PipelineStatus, &a.PipelineError, &a.PipelineAttempt, &a.PipelineUpdatedAt); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
@@ -991,7 +1042,9 @@ func (s *Store) GetFeedArticles(days, limit, offset int) ([]Article, error) {
 	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
 	rows, err := s.db.Query(`
 		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
-		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, ''),
+		       COALESCE(a.pipeline_status, ''), COALESCE(a.pipeline_error, ''),
+		       COALESCE(a.pipeline_attempt, 0), COALESCE(a.pipeline_updated_at, 0)
 		FROM biz_articles a
 		JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
@@ -1008,7 +1061,7 @@ func (s *Store) GetFeedArticles(days, limit, offset int) ([]Article, error) {
 	for rows.Next() {
 		var a Article
 		var bookmarked, isRead int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus, &a.PipelineStatus, &a.PipelineError, &a.PipelineAttempt, &a.PipelineUpdatedAt); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
@@ -1029,7 +1082,9 @@ func (s *Store) GetWatchedArticlesSince(since time.Time, limit int) ([]Article, 
 
 	rows, err := s.db.Query(`
 		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
-		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, ''),
+		       COALESCE(a.pipeline_status, ''), COALESCE(a.pipeline_error, ''),
+		       COALESCE(a.pipeline_attempt, 0), COALESCE(a.pipeline_updated_at, 0)
 		FROM biz_articles a
 		JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
@@ -1046,7 +1101,7 @@ func (s *Store) GetWatchedArticlesSince(since time.Time, limit int) ([]Article, 
 	for rows.Next() {
 		var a Article
 		var bookmarked, isRead int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus, &a.PipelineStatus, &a.PipelineError, &a.PipelineAttempt, &a.PipelineUpdatedAt); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
@@ -1162,7 +1217,9 @@ func (s *Store) GetBookmarkedArticles(limit, offset int) ([]Article, error) {
 
 	rows, err := s.db.Query(`
 		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
-		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
+		       COALESCE(e.status, ''), COALESCE(e.pushed_status, ''),
+		       COALESCE(a.pipeline_status, ''), COALESCE(a.pipeline_error, ''),
+		       COALESCE(a.pipeline_attempt, 0), COALESCE(a.pipeline_updated_at, 0)
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
@@ -1179,7 +1236,7 @@ func (s *Store) GetBookmarkedArticles(limit, offset int) ([]Article, error) {
 	for rows.Next() {
 		var a Article
 		var bookmarked, isRead int
-		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus); err != nil {
+		if err := rows.Scan(&a.ID, &a.GHID, &a.GHName, &a.Title, &a.Desc, &a.URL, &a.AppID, &a.LocalType, &a.LocalID, &a.SortSeq, &a.PublishedAt, &a.SyncedAt, &bookmarked, &isRead, &a.ExportStatus, &a.PushStatus, &a.PipelineStatus, &a.PipelineError, &a.PipelineAttempt, &a.PipelineUpdatedAt); err != nil {
 			return nil, err
 		}
 		a.Bookmarked = bookmarked != 0
@@ -3130,8 +3187,8 @@ func (s *Store) GetExportRecordsWithoutSummary(limit int) ([]ExportedArticle, er
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.Query(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at 
-		FROM biz_exported_articles 
+	rows, err := s.db.Query(`SELECT id, article_id, source_url, md_path, summary_path, status, error, kind, attempts, exported_at, summary_at
+		FROM biz_exported_articles
 		WHERE status = 'exported' AND md_path != '' AND summary_path = ''
 		ORDER BY exported_at DESC
 		LIMIT ?`, limit)
@@ -3150,3 +3207,206 @@ func (s *Store) GetExportRecordsWithoutSummary(limit int) ([]ExportedArticle, er
 	}
 	return records, rows.Err()
 }
+
+// --- Pipeline 状态机（PR1） ---
+//
+// 设计要点：
+//   - status 用单列字符串，5 个正态 + 4 个 failed:<stage>，状态机驱动见 pipeline.go
+//   - Worker 按 (status, updated_at ASC) 拉候选，避免重扫全表
+//   - failed:<stage> 不在 ticker 中自动重试（反爬保护），只能走 /admin/pipeline/retry/:id
+//   - pipeline_error / pipeline_attempt / pipeline_updated_at 由 Worker 维护，
+//     不允许外部手动改 —— 改了 Worker 也不会信任
+
+// pipelinePickableStatuses Worker 可拉取的候选状态集合。
+//
+// 用 IN (...) 而非 LIKE 'failed:%'：状态集合是封闭的，列出来更安全；
+// 未来加新状态时这里要同步更新（编译期字符串常量的好处）。
+var pipelinePickableStatuses = []string{
+	PipelinePending,
+	PipelineFailedFetch,
+	PipelineFailedMdexport,
+	PipelineFailedSummarize,
+	PipelineFailedImapush,
+}
+
+// PickPipelineBatch 拉取一批待处理的文章（pending + failed:*）。
+//
+// 按 pipeline_updated_at ASC 排序：先处理最久没动过的，避免某篇反复失败阻塞新文。
+// 返回的 Article 已包含 pipeline_* 字段（被 Article 结构的 JSON tag 暴露给前端）。
+func (s *Store) PickPipelineBatch(ctx context.Context, limit int) ([]Article, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// 拼 IN (?,?,?,?,?)
+	placeholders := make([]string, len(pipelinePickableStatuses))
+	args := make([]any, len(pipelinePickableStatuses)+1)
+	for i, s := range pipelinePickableStatuses {
+		placeholders[i] = "?"
+		args[i] = s
+	}
+	args[len(pipelinePickableStatuses)] = limit
+
+	q := articleRows + `
+	WHERE a.pipeline_status IN (` + strings.Join(placeholders, ",") + `)
+	ORDER BY a.pipeline_updated_at ASC
+	LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArticles(rows)
+}
+
+// AdvancePipeline 把单篇文章推进到 nextStatus，清错误，updated_at=now，attempt++。
+//
+// 设计要点：attempt 计数包含所有阶段累计尝试次数（含失败重试）。
+// 一个 article 经历 fetch→mdexport→summarize→imapush 全部成功 = attempt = 4。
+// 想要"每阶段单独计数"可以看 stage_logs（未来 PR 加），单 attempt 已经够 ops 看健康度。
+func (s *Store) AdvancePipeline(ctx context.Context, articleID int64, nextStatus string) error {
+	if nextStatus == "" {
+		return errors.New("bizhub: AdvancePipeline: empty nextStatus")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE biz_articles
+		SET pipeline_status = ?,
+		    pipeline_error = '',
+		    pipeline_attempt = pipeline_attempt + 1,
+		    pipeline_updated_at = ?
+		WHERE id = ?`,
+		nextStatus, now, articleID)
+	return err
+}
+
+// MarkPipelineFailed 把文章标为 failed:<stage>，记录错误，updated_at=now，attempt++。
+//
+// stage 必须是 "fetch" / "mdexport" / "summarize" / "imapush" 之一；
+// 函数不强制校验，调错 stage 名会让状态变 "failed:bogus" 这种垃圾值。
+// 上游 pipeline.RunStage 已经做了 stage 名常量约束，store 不重复。
+func (s *Store) MarkPipelineFailed(ctx context.Context, articleID int64, stage, errStr string) error {
+	if stage == "" {
+		return errors.New("bizhub: MarkPipelineFailed: empty stage")
+	}
+	if len(errStr) > 512 {
+		errStr = errStr[:512]
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE biz_articles
+		SET pipeline_status = ?,
+		    pipeline_error = ?,
+		    pipeline_attempt = pipeline_attempt + 1,
+		    pipeline_updated_at = ?
+		WHERE id = ?`,
+		"failed:"+stage, errStr, now, articleID)
+	return err
+}
+
+// ResetPipelineToPending 把 failed:<stage> 倒回 pending，让 ticker 再次拉取。
+//
+// 仅由 /admin/pipeline/retry/:id 触发（手动作业）。
+// 设计要点：只把 failed 倒回 pending；如果当前是其他正态，状态不动
+// （避免不小心重置正在跑的中间状态）。
+func (s *Store) ResetPipelineToPending(ctx context.Context, articleID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE biz_articles
+		SET pipeline_status = 'pending',
+		    pipeline_error = '',
+		    pipeline_updated_at = ?
+		WHERE id = ? AND pipeline_status LIKE 'failed:%'`,
+		now, articleID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("bizhub: article not in failed state (only failed:* can be retried)")
+	}
+	return nil
+}
+
+// PipelineStatusCount 按 pipeline_status 分组计数。
+//
+// 返回 map[status]count，未出现的状态不在 map 里（不是 0）。
+// 用来给 /admin/pipeline/status 端点画漏斗图。
+func (s *Store) PipelineStatusCount(ctx context.Context) (map[string]int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT pipeline_status, COUNT(1)
+		FROM biz_articles
+		WHERE pipeline_status != ''
+		GROUP BY pipeline_status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]int)
+	for rows.Next() {
+		var st string
+		var n int
+		if err := rows.Scan(&st, &n); err != nil {
+			return nil, err
+		}
+		out[st] = n
+	}
+	return out, rows.Err()
+}
+
+// RecentFailedArticles 取最近 N 条失败的文章（任意 failed:*）。
+//
+// 按 pipeline_updated_at DESC 排，给 /admin/pipeline/status 显示「最近发生了什么」。
+func (s *Store) RecentFailedArticles(ctx context.Context, limit int) ([]Article, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	q := articleRows + `
+	WHERE a.pipeline_status LIKE 'failed:%'
+	ORDER BY a.pipeline_updated_at DESC
+	LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArticles(rows)
+}
+
+// PipelineStateChanged 文章 pipeline 字段被任意渠道更新后通知订阅方（占位）。
+//
+// 当前没有任何订阅者；保留接口为了让 PR1 之后想做"实时面板"SSE/WebSocket
+// 时不用改 store 接口。Worker 是当前唯一的 writer，但 admin UI 后续可能
+// 也要写（比如一键 mark all pushed），到时候订阅会让那个写入路径做正确性校验。
+//
+// 在 Go 里这种"预留接口"通常用 struct{}{} / chan struct{} 实现，
+// 但更标准的做法是直接写注释说明意图、不留空接口。这里选择后者。
+// 真正要落地时加一行：`type PipelineObserver interface { OnChange(articleID int64) }`

@@ -641,3 +641,13 @@ func (c *stubExportConfig) GetIMAPushSkillDir() string      { return "" }
 func (c *stubExportConfig) GetIMAPushKBID() string          { return "" }
 func (c *stubExportConfig) GetIMAPushFolderID() string      { return "" }
 func (c *stubExportConfig) GetIMAPushConcurrency() int      { return 0 }
+
+// LLM（PR1 pipeline worker 需要）—— 测试 stub 不构造真实 LLM
+func (c *stubExportConfig) GetLLMBaseURL() string { return "" }
+func (c *stubExportConfig) GetLLMAPIKey() string  { return "" }
+func (c *stubExportConfig) GetLLMModel() string   { return "" }
+
+// Pipeline worker（PR1）—— 测试 stub 默认不启用
+func (c *stubExportConfig) GetBizWorkerEnabled() bool  { return false }
+func (c *stubExportConfig) GetBizWorkerInterval() int  { return 0 }
+func (c *stubExportConfig) GetBizWorkerBatchSize() int { return 0 }

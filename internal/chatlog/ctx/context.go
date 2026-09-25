@@ -252,6 +252,25 @@ func (c *Context) GetIMAPushConcurrency() int {
 	return 0
 }
 
+// GetBizWorkerEnabled TUI Context 不跑后台 pipeline worker。
+//
+// TUI 是一次性交互会话（解密、看消息、退出），没有"持续推进文章"的需求；
+// 后台 worker 是 server 模式的职责。返回 false 让 Worker.Start 直接 no-op。
+func (c *Context) GetBizWorkerEnabled() bool {
+	return false
+}
+
+// GetBizWorkerInterval TUI Context 不持久化 biz_worker_interval，返回 0（调用方回退到默认 300s）。
+// 由于 GetBizWorkerEnabled 已返回 false，函数实际不会被调用；保留实现只为满足接口。
+func (c *Context) GetBizWorkerInterval() int {
+	return 0
+}
+
+// GetBizWorkerBatchSize TUI Context 不持久化 biz_worker_batch_size，返回 0（调用方回退到默认 20）。
+func (c *Context) GetBizWorkerBatchSize() int {
+	return 0
+}
+
 func (c *Context) GetWebhook() *conf.Webhook {
 	return c.conf.Webhook
 }
