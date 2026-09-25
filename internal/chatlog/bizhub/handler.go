@@ -1545,11 +1545,18 @@ func handleGenerateBatchSummaries(c *gin.Context, svc *Service, llm *LLMClient) 
 // handlePipelineStatus 返回 pipeline 状态快照。
 //
 // 返回字段：
-//   enabled   — worker 是否启用（false 时 ticker 不会触发）
-//   counts    — map[status]count，例如 {"pending": 23000, "pushed": 100, "failed:fetch": 5}
-//   recent    — 最近 20 条 failed 文章（任意 stage），含 pipeline_error 字段
+//   enabled         — worker 是否启用（false 时 ticker 不会触发）
+//   counts          — map[status]count，例如 {"pending": 23000, "pushed": 100, "failed:fetch": 5}
+//   failed_by_stage — 4 个失败分类的拆分，运维一眼看出"哪个 stage 在掉"
+//                     例如 {"fetch": 2, "mdexport": 1, "summarize": 0, "imapush": 1}
+//   totals          — 4 个汇总：all/in_flight/completed/failed
+//                     in_flight = pending + fetched + md_exported + summarized
+//                     completed = pushed
+//                     failed    = failed:fetch + failed:mdexport + failed:summarize + failed:imapush
+//   recent          — 最近 20 条 failed 文章（任意 stage），含 pipeline_error 字段
 //
-// recent 给运维一个直观的"现在卡在哪"，counts 给"工作量分布"。
+// failed_by_stage 是 PR3 新增：原版只有 counts，运维要从 4 个 failed:* 状态手动相加；
+// 现在直接给 stage 维度。counts 仍然返回，UI 可以两者并存。
 func handlePipelineStatus(c *gin.Context, svc *Service) {
 	enabled := false
 	if w := svc.Worker(); w != nil {
@@ -1565,6 +1572,30 @@ func handlePipelineStatus(c *gin.Context, svc *Service) {
 		counts = map[string]int{}
 	}
 
+	failedByStage := map[string]int{
+		StageFetch:     0,
+		StageMdexport:  0,
+		StageSummarize: 0,
+		StageImapush:   0,
+	}
+	for status, n := range counts {
+		if !strings.HasPrefix(status, "failed:") {
+			continue
+		}
+		stage := strings.TrimPrefix(status, "failed:")
+		if _, known := failedByStage[stage]; known {
+			failedByStage[stage] = n
+		}
+		// 未知 stage 名（理论上不该有）静默忽略，避免 panic / 显示垃圾
+	}
+
+	totals := map[string]int{
+		"all":       counts[PipelinePending] + counts[PipelineFetched] + counts[PipelineMDExported] + counts[PipelineSummarized] + counts[PipelinePushed] + failedByStage[StageFetch] + failedByStage[StageMdexport] + failedByStage[StageSummarize] + failedByStage[StageImapush],
+		"in_flight": counts[PipelinePending] + counts[PipelineFetched] + counts[PipelineMDExported] + counts[PipelineSummarized],
+		"completed": counts[PipelinePushed],
+		"failed":    failedByStage[StageFetch] + failedByStage[StageMdexport] + failedByStage[StageSummarize] + failedByStage[StageImapush],
+	}
+
 	recent, err := svc.Store().RecentFailedArticles(c.Request.Context(), 20)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -1575,9 +1606,11 @@ func handlePipelineStatus(c *gin.Context, svc *Service) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"enabled": enabled,
-		"counts":  counts,
-		"recent":  recent,
+		"enabled":         enabled,
+		"counts":          counts,
+		"failed_by_stage": failedByStage,
+		"totals":          totals,
+		"recent":          recent,
 	})
 }
 
