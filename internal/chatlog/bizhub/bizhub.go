@@ -564,10 +564,7 @@ type SummaryRequest struct {
 	Scope       string `json:"scope,omitempty"`
 }
 
-const summarySystemPrompt = "你是公众号内容分析师。根据用户提供的文章列表与可选指令，生成结构化分析报告。" +
-	"你必须严格输出合法 JSON，遵守以下 schema 且不得出现 JSON 之外的字符。" +
-	"如果输出代码块请用 \x60\x60\x60json\x60\x60\x60。" +
-	"schema: {highlights:[string], themes:[{title,summary,articles:[{ghName,title,url}]}], mustReads:[{ghName,title,url,score(1-10),reason}], byAccount:[{ghName,digest}], summary:string}。"
+const summarySystemPrompt = "summary_system" // see prompts/summary_system.md
 
 func truncateRunes(s string, n int) string {
 	r := []rune(s)
@@ -575,6 +572,24 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n])
+}
+
+// firstLine 截取 s 的第一行（按 \n 切），截到 max runes。
+//
+// daily digest 在 LLM 没返回 JSON 时用这个当 headline 兜底。LLM 偶尔会先吐一句
+// "以下是..." 的引导句再吐 JSON，那种情况下用 firstLine 也比整段塞进 headline
+// 干净。
+func firstLine(s string, max int) string {
+	if s == "" {
+		return ""
+	}
+	for i, r := range s {
+		if r == '\n' {
+			s = s[:i]
+			break
+		}
+	}
+	return truncateRunes(s, max)
 }
 
 // GenerateSummary 抓取关注公众号近期文章、调用 LLM 生成结构化汇总并落库。
@@ -698,15 +713,15 @@ func (s *Service) GenerateSummary(ctx context.Context, req SummaryRequest, llm *
 	}
 	sb.WriteString("请按上面的 schema 输出 JSON。")
 
-	text, inTok, outTok, err := llm.CompleteWithSystem(ctx, summarySystemPrompt, sb.String())
+	systemPrompt, err := LoadPrompt(summarySystemPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("bizhub: load summary prompt: %w", err)
+	}
+	text, structured, inTok, outTok, err := llm.CompleteStructured(ctx, systemPrompt, sb.String())
 	if err != nil {
 		return nil, err
 	}
-
-	var structured json.RawMessage
-	if raw, ok := ParseStructured(text); ok {
-		structured = raw
-	} else {
+	if len(structured) == 0 {
 		log.Warn().Msg("bizhub: llm output not parseable as json, fallback to markdown content")
 	}
 
@@ -748,12 +763,7 @@ type FeedSummary struct {
 
 const defaultFeedSummaryCacheHours = 4
 
-const feedSummarySystemPrompt = "你是公众号内容分析师。用户会给你一份我关注的微信公众号在指定时间窗口内发布的文章列表（仅含标题、公众号名、发布时间、摘要、链接，无正文）。" +
-	"你必须严格输出合法 JSON，不得出现 JSON 之外的任何文字；如需包裹请使用 \x60\x60\x60json\x60\x60\x60。" +
-	"schema 必须严格遵守：{\"headline\":\"<一句话整体概述>\",\"themes\":[{\"title\":\"<主题名>\",\"summary\":\"<一段总结>\",\"count\":<相关文章数>}],\"keywords\":[<8-12 个高频实体词或短语>]," +
-	"\"hotTakes\":[<3-5 条跨文章的观点，每条一句话>]}" +
-	"themes 至少 3 个，按文章数倒序；keywords 优先人名/机构/产品/技术名词；hotTakes 必须是跨文章综合提炼而非单篇摘要。" +
-	"headline 不要包含时间词如 \"/最近/今日\"，聚焦主题判断。"
+const feedSummarySystemPrompt = "feed_summary_system" // see prompts/feed_summary_system.md
 
 func (s *Service) feedSummaryCacheHours() int {
 	if s.config != nil {
@@ -864,11 +874,15 @@ func (s *Service) GenerateFeedSummary(ctx context.Context, windowDays int, llm *
 	}
 	sb.WriteString("请按 schema 输出严格 JSON。themes 的 count 字段填该主题下的相关文章数。")
 
-	text, _, _, err := llm.CompleteWithSystem(ctx, feedSummarySystemPrompt, sb.String())
+	systemPrompt, err := LoadPrompt(feedSummarySystemPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("bizhub: load feed summary prompt: %w", err)
+	}
+	// feed summary 严格要求 JSON —— 失败直接 ErrNotJSON，调用方据此给前端 502。
+	text, _, _, err := llm.CompleteWithRetry(ctx, systemPrompt, sb.String())
 	if err != nil {
 		return nil, err
 	}
-
 	structured, ok := ParseStructured(text)
 	if !ok {
 		return nil, fmt.Errorf("%w: feed summary not parseable as json", ErrNotJSON)
@@ -891,13 +905,7 @@ func (s *Service) GenerateFeedSummary(ctx context.Context, windowDays int, llm *
 
 // --- 每日精选 ---
 
-const dailyDigestSystemPrompt = "你是公众号内容编辑。用户会给你一份关注的微信公众号最近发布的文章列表（仅含标题、公众号名、发布时间、摘要、链接，无正文）。" +
-	"你的任务：从中精选 5-10 篇最值得读的文章。\n" +
-	"输出严格 JSON（不要输出任何其他文字），格式如下：\n" +
-	"{\"headline\":\"一句话概括今天的信息焦点\",\"picks\":[{\"id\":数字,\"title\":\"标题\",\"source\":\"公众号名\",\"reason\":\"为什么值得读，20-40字\",\"score\":数字1到10}]}\n" +
-	"其中 id 必须与输入文章中 [id=数字] 的数字完全一致。\n" +
-	"挑选标准：信息密度高、对投资决策或行业认知有启发、时效性强。避免纯营销、纯转发、内容单薄的文章。\n" +
-	"picks 按 score 降序排列。只从给定列表中选，不要编造。"
+const dailyDigestSystemPrompt = "daily_digest_system" // see prompts/daily_digest_system.md
 
 // GenerateDailyDigest 生成今日精选。
 // fresh=true 跳过缓存强制重新生成；否则如果今天已有精选且文章没大变，直接返回。
@@ -940,16 +948,17 @@ func (s *Service) GenerateDailyDigest(ctx context.Context, llm *LLMClient, fresh
 			desc, a.URL))
 	}
 
-	text, _, _, err := llm.CompleteWithSystem(ctx, dailyDigestSystemPrompt, sb.String())
+	systemPrompt, err := LoadPrompt(dailyDigestSystemPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("bizhub: load daily digest prompt: %w", err)
+	}
+	// daily digest 走 lenient：JSON 解析失败时 raw text 当 headline、picks 留空。
+	// 原因：daily digest 是日常消费品，宁可看到 raw markdown 也不能 502 报错
+	// 让用户没法用。和 feed summary 的「严格 JSON」是两种产品选择 —— digest
+	// 重"先有内容"，feed summary 重"质量"。
+	text, structured, _, _, err := llm.CompleteStructured(ctx, systemPrompt, sb.String())
 	if err != nil {
 		return nil, err
-	}
-
-	// 解析 JSON
-	structured, ok := ParseStructured(text)
-	if !ok {
-		log.Warn().Str("raw", text[:min(len(text), 800)]).Msg("bizhub: daily digest LLM output not JSON")
-		return nil, ErrNotJSON
 	}
 
 	// 提取 headline 和 picks
@@ -963,9 +972,17 @@ func (s *Service) GenerateDailyDigest(ctx context.Context, llm *LLMClient, fresh
 			Score  int    `json:"score"`
 		} `json:"picks"`
 	}
-	if err := json.Unmarshal(structured, &result); err != nil {
-		log.Warn().Str("raw", text[:min(len(text), 500)]).Msg("bizhub: daily digest JSON parse failed")
-		return nil, ErrNotJSON
+	switch {
+	case len(structured) > 0:
+		if err := json.Unmarshal(structured, &result); err != nil {
+			log.Warn().Err(err).Msg("bizhub: daily digest structured parse failed, fallback to raw text headline")
+			result.Headline = firstLine(text, 80)
+		}
+	default:
+		// LLM 没返回 JSON —— raw text 当 headline，picks 空着。digest 至少能给用户
+		// 一个能看的页面（headline + 文章列表）。
+		log.Warn().Int("textLen", len(text)).Msg("bizhub: daily digest LLM output not JSON, fallback to raw text")
+		result.Headline = firstLine(text, 80)
 	}
 
 	// 建立 article ID → article 的映射（用于补全 URL 等信息）

@@ -21,11 +21,7 @@ type ArticleSummary struct {
 	DetailBody string   `yaml:"-" json:"detailBody"` // MD body (not in frontmatter)
 }
 
-const articleSummarySystemPrompt = "你是公众号内容分析师。用户会给你一篇微信公众号文章的 Markdown 全文。" +
-	"你必须严格输出合法 JSON，不得出现 JSON 之外的任何文字；如需包裹请使用 \x60\x60\x60json\x60\x60\x60。" +
-	"schema 必须严格遵守：{summary:string(200字以内的中文摘要), themes:[string(3-6个主题标签)], keywords:[string(6-10个高频实体词或短语)], " +
-	"mustRead:number(1-10的评分，10为必读), highlights:[string(3-5条关键观点，每条一句话)]}。" +
-	"summary 必须是独立可读的摘要，不依赖标题；highlights 必须是从文章中提炼的具体观点而非泛泛描述。"
+const articleSummarySystemPrompt = "article_summary_system" // see prompts/article_summary_system.md
 
 // GenerateArticleSummary 为单篇已导出的文章生成摘要
 func (s *Service) GenerateArticleSummary(ctx context.Context, articleID int64, llm *LLMClient) error {
@@ -71,18 +67,17 @@ func (s *Service) GenerateArticleSummary(ctx context.Context, articleID int64, l
 	fmt.Fprintf(&sb, "---\n\n%s\n", content)
 	fmt.Fprintf(&sb, "\n---\n\n请按 schema 输出 JSON。")
 
-	// 调用 LLM
-	text, _, _, err := llm.CompleteWithSystem(ctx, articleSummarySystemPrompt, sb.String())
+	systemPrompt, err := LoadPrompt(articleSummarySystemPrompt)
+	if err != nil {
+		return fmt.Errorf("bizhub: load article summary prompt: %w", err)
+	}
+	text, summaryData, _, _, err := llm.CompleteStructured(ctx, systemPrompt, sb.String())
 	if err != nil {
 		return err
 	}
-
-	// 解析 JSON
-	summaryData, ok := ParseStructured(text)
-	if !ok {
+	if summaryData == nil {
 		// 降级：把 LLM 输出直接当摘要
 		log.Warn().Int64("articleID", articleID).Msg("bizhub: summary output not parseable as json")
-		summaryData = nil
 	}
 
 	// 构建 ArticleSummary
