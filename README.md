@@ -1,6 +1,8 @@
 <div align="center">
 
-![chatlog](https://github.com/user-attachments/assets/e085d3a2-e009-4463-b2fd-8bd7df2b50c3)
+![chatlog HTTP 控制台](docs/images/landing.png)
+
+<sub>HTTP 服务启动后的 API 控制台（`http://127.0.0.1:5030/`）</sub>
 
 _聊天记录工具，帮助大家轻松使用自己的聊天数据_
 
@@ -214,7 +216,12 @@ macOS 用户在获取密钥前需要临时关闭 SIP（系统完整性保护）�
 
 ## HTTP API
 
-启动 HTTP 服务后（默认地址 `http://127.0.0.1:5030`），可通过以下 API 访问数据：
+启动 HTTP 服务后（默认地址 `http://127.0.0.1:5030`），可通过以下 API 访问数据。
+根路径 `/` 是一个内置的 API 控制台，可以直接填表试查、复制 curl 命令，并给出结果：
+
+![HTTP 控制台](docs/images/landing.png)
+
+配了 `auth_token` 时用 `http://127.0.0.1:5030/?token=<auth_token>` 打开——页面会把它带到后续请求上。
 
 ### 聊天记录查询
 

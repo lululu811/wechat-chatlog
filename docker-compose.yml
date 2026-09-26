@@ -29,7 +29,7 @@ services:
     volumes:
       # 数据目录，微信的本地数据目录
       # 请修改左侧的 /path/to/your/wechat/data 为实际的微信数据目录
-      # 例如 "/Users/sarv/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_xxx:/app/data"
+      # 例如 "/Users/<you>/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_xxx:/app/data"
       - "/path/to/your/wechat/data:/app/data"
       # 工作目录，用于保存已解密的数据库文件
       - "work-dir:/app/work"

@@ -1,791 +1,656 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chatlog</title>
     <style>
       :root {
-        --primary-color: #3498db;
-        --primary-dark: #2980b9;
-        --success-color: #2ecc71;
-        --success-dark: #27ae60;
-        --error-color: #e74c3c;
-        --bg-light: #f5f5f5;
-        --bg-white: #ffffff;
-        --text-color: #333333;
-        --border-color: #dddddd;
+        --bg: #fafaf9;
+        --panel: #ffffff;
+        --text: #1c1917;
+        --muted: #78716c;
+        --border: #e7e5e4;
+        --accent: #047857;
+        --accent-soft: #ecfdf5;
+        --danger: #b91c1c;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
       }
 
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0c0a09;
+          --panel: #1c1917;
+          --text: #f5f5f4;
+          --muted: #a8a29e;
+          --border: #292524;
+          --accent: #34d399;
+          --accent-soft: #042f2e;
+          --danger: #fca5a5;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
       body {
+        margin: 0;
+        padding: 2.5rem 1.25rem 4rem;
+        background: var(--bg);
+        color: var(--text);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-        line-height: 1.6;
-        color: var(--text-color);
-        max-width: 1200px;
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .wrap {
+        max-width: 52rem;
         margin: 0 auto;
-        padding: 20px;
-        background-color: #fafafa;
       }
 
-      .container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        width: 100%;
-      }
-
-      .welcome-text {
+      header {
         text-align: center;
-        margin-bottom: 30px;
-      }
-
-      .api-section {
-        background-color: var(--bg-light);
-        border-radius: 10px;
-        padding: 25px;
-        width: 100%;
-        max-width: 850px;
-        margin-bottom: 30px;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        margin-bottom: 2rem;
       }
 
       h1 {
-        color: #2c3e50;
-        margin-bottom: 15px;
+        margin: 0 0 0.35rem;
+        font-size: 1.9rem;
+        letter-spacing: -0.02em;
       }
 
-      h2 {
-        color: var(--primary-color);
-        margin-top: 20px;
-        border-bottom: 2px solid var(--primary-color);
-        padding-bottom: 8px;
-        display: inline-block;
+      .tagline {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.95rem;
       }
 
-      h3 {
-        margin-top: 20px;
-        color: #34495e;
+      .fork-note {
+        margin: 1.25rem auto 0;
+        max-width: 40rem;
+        padding: 0.7rem 0.9rem;
+        border: 1px solid var(--border);
+        border-radius: 0.6rem;
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 0.82rem;
+        text-align: left;
       }
 
-      .docs-link {
-        color: var(--primary-color);
-        text-decoration: none;
-        font-weight: bold;
-        transition: all 0.2s ease;
+      .fork-note a {
+        color: var(--accent);
       }
 
-      .docs-link:hover {
-        text-decoration: underline;
-        color: var(--primary-dark);
-      }
-
-      .api-tester {
-        background-color: var(--bg-white);
-        border: 1px solid var(--border-color);
-        border-radius: 10px;
-        padding: 25px;
-        margin-top: 20px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
-      }
-
-      .form-group {
-        margin-bottom: 18px;
-      }
-
-      label {
-        display: block;
-        margin-bottom: 6px;
-        font-weight: 600;
-        color: #34495e;
-      }
-
-      input,
-      select,
-      textarea {
-        width: 100%;
-        padding: 10px 12px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        box-sizing: border-box;
-        font-size: 14px;
-        transition: all 0.3s;
-      }
-
-      input:focus,
-      select:focus,
-      textarea:focus {
-        outline: none;
-        border-color: var(--primary-color);
-        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
-      }
-
-      input::placeholder,
-      textarea::placeholder {
-        color: #aaa;
-      }
-
-      button {
-        background-color: var(--primary-color);
-        color: white;
-        border: none;
-        padding: 12px 18px;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 16px;
-        font-weight: 500;
-        transition: all 0.3s;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      button:hover {
-        background-color: var(--primary-dark);
-        transform: translateY(-1px);
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-      }
-
-      button:active {
-        transform: translateY(0);
-      }
-
-      .result-container {
-        margin-top: 20px;
-        border: 1px solid var(--border-color);
-        border-radius: 6px;
-        padding: 15px;
-        background-color: #f9f9f9;
-        max-height: 400px;
-        overflow-y: auto;
-        white-space: pre-wrap;
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
-          monospace;
-        font-size: 14px;
-        line-height: 1.5;
-        position: relative;
-      }
-
-      .request-url {
-        background-color: #f0f0f0;
-        padding: 10px;
-        border-radius: 6px;
-        margin-bottom: 10px;
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
-          monospace;
-        font-size: 14px;
-        word-break: break-all;
-        border: 1px dashed #ccc;
+      nav.tabs {
         display: flex;
-        justify-content: space-between;
-        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 1.5rem;
       }
 
-      .url-text {
-        flex-grow: 1;
-        margin-right: 10px;
+      nav.tabs button {
+        appearance: none;
+        border: 0;
+        background: none;
+        padding: 0.55rem 0.8rem;
+        margin-bottom: -1px;
+        border-bottom: 2px solid transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 0.9rem;
+        cursor: pointer;
+        border-radius: 0.4rem 0.4rem 0 0;
       }
 
-      .copy-url-button {
-        background-color: #9b59b6;
-        padding: 6px 12px;
-        font-size: 12px;
+      nav.tabs button:hover {
+        color: var(--text);
+        background: var(--panel);
+      }
+
+      nav.tabs button[aria-selected="true"] {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+        font-weight: 600;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        padding: 1.25rem;
+      }
+
+      .endpoint {
+        display: inline-block;
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        padding: 0.1rem 0.45rem;
+        border-radius: 0.35rem;
+        background: var(--accent-soft);
+        color: var(--accent);
         white-space: nowrap;
       }
 
-      .loading {
-        text-align: center;
-        padding: 20px;
-        color: #666;
+      .desc {
+        margin: 0.6rem 0 1.1rem;
+        color: var(--muted);
+        font-size: 0.9rem;
       }
 
-      .loading::after {
-        content: "...";
-        animation: dots 1.5s steps(5, end) infinite;
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+        gap: 0.9rem;
       }
 
-      @keyframes dots {
-        0%,
-        20% {
-          content: ".";
-        }
-        40% {
-          content: "..";
-        }
-        60% {
-          content: "...";
-        }
-        80%,
-        100% {
-          content: "";
-        }
-      }
-
-      .tab-container {
-        display: flex;
-        margin-bottom: 20px;
-        border-bottom: 1px solid #e0e0e0;
-      }
-
-      .tab {
-        padding: 12px 20px;
-        cursor: pointer;
-        margin-right: 5px;
-        border-radius: 6px 6px 0 0;
-        font-weight: 500;
-        transition: all 0.2s;
-        border: 1px solid transparent;
-        border-bottom: none;
-        position: relative;
-        bottom: -1px;
-      }
-
-      .tab:hover {
-        background-color: #f0f8ff;
-      }
-
-      .tab.active {
-        background-color: var(--bg-white);
-        border-color: #e0e0e0;
-        color: var(--primary-color);
-        border-bottom: 1px solid white;
-      }
-
-      .tab-content {
-        display: none;
-        padding: 20px 0;
-      }
-
-      .tab-content.active {
+      .field label {
         display: block;
-        animation: fadeIn 0.3s;
+        font-size: 0.82rem;
+        margin-bottom: 0.3rem;
+        color: var(--text);
       }
 
-      @keyframes fadeIn {
-        from {
-          opacity: 0;
-        }
-        to {
-          opacity: 1;
-        }
+      .field input,
+      .field select {
+        width: 100%;
+        padding: 0.45rem 0.6rem;
+        border: 1px solid var(--border);
+        border-radius: 0.45rem;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+        font-size: 0.88rem;
       }
 
-      .button-group {
+      .field input:focus,
+      .field select:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: -1px;
+        border-color: transparent;
+      }
+
+      .opt {
+        color: var(--muted);
+        font-size: 0.75rem;
+        margin-left: 0.3rem;
+      }
+
+      .actions {
         display: flex;
-        justify-content: flex-end;
-        margin-top: 20px;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1.1rem;
       }
 
-      .copy-button {
-        background-color: var(--success-color);
-        padding: 8px 15px;
-        font-size: 14px;
-        margin-left: 10px;
+      button.primary {
+        appearance: none;
+        border: 0;
+        border-radius: 0.45rem;
+        padding: 0.5rem 1.1rem;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-size: 0.88rem;
+        font-weight: 600;
+        cursor: pointer;
       }
 
-      .copy-button:hover {
-        background-color: var(--success-dark);
+      button.primary:disabled {
+        opacity: 0.55;
+        cursor: progress;
       }
 
-      .error-message {
-        color: var(--error-color);
-        font-weight: bold;
-        margin-top: 10px;
-        padding: 10px;
-        border-radius: 4px;
-        background-color: rgba(231, 76, 60, 0.1);
-        border-left: 4px solid var(--error-color);
+      button.ghost {
+        appearance: none;
+        border: 1px solid var(--border);
+        border-radius: 0.45rem;
+        padding: 0.45rem 0.8rem;
+        background: none;
+        color: var(--muted);
+        font: inherit;
+        font-size: 0.82rem;
+        cursor: pointer;
+      }
+
+      button.ghost:hover {
+        color: var(--text);
+        border-color: var(--muted);
+      }
+
+      #outcome {
+        margin-top: 1.25rem;
         display: none;
       }
 
-      .api-description {
-        margin-bottom: 15px;
-        color: #555;
-      }
-
-      .badge {
-        display: inline-block;
-        padding: 3px 8px;
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: 600;
-        margin-left: 8px;
-        background-color: rgba(52, 152, 219, 0.1);
-        color: var(--primary-color);
-      }
-
-      .optional-param {
-        font-size: 12px;
-        color: #777;
-        margin-left: 5px;
-        font-style: italic;
-      }
-
-      .required-field {
-        color: var(--error-color);
-        font-weight: bold;
-      }
-
-      .biz-entry {
+      .url-line {
         display: flex;
         align-items: center;
-        gap: 14px;
+        gap: 0.5rem;
         flex-wrap: wrap;
-        background: var(--bg-white);
-        border: 1px solid var(--border-color);
-        border-left: 4px solid var(--success-color);
-        border-radius: 8px;
-        padding: 16px 20px;
-        margin-bottom: 24px;
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        color: var(--muted);
+        margin-bottom: 0.7rem;
       }
 
-      .biz-entry a {
-        color: var(--success-dark);
-        font-weight: 600;
-        font-size: 16px;
+      .url-line code {
+        word-break: break-all;
+      }
+
+      pre {
+        margin: 0;
+        padding: 0.9rem;
+        max-height: 26rem;
+        overflow: auto;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 0.6rem;
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .err {
+        color: var(--danger);
+        font-size: 0.85rem;
+      }
+
+      section.doc {
+        margin-top: 1.5rem;
+      }
+
+      section.doc h2 {
+        margin: 0 0 0.6rem;
+        font-size: 1rem;
+      }
+
+      section.doc p,
+      section.doc li {
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+
+      section.doc ul {
+        margin: 0;
+        padding-left: 1.1rem;
+      }
+
+      section.doc a {
+        color: var(--accent);
+      }
+
+      .link-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+
+      .link-row a {
+        display: inline-block;
+        padding: 0.4rem 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 0.45rem;
+        color: var(--text);
+        font-size: 0.82rem;
         text-decoration: none;
       }
 
-      .biz-entry a:hover {
-        text-decoration: underline;
+      .link-row a:hover {
+        border-color: var(--accent);
+        color: var(--accent);
       }
 
-      .biz-entry span {
-        color: #666666;
-        font-size: 14px;
+      footer {
+        margin-top: 2.5rem;
+        text-align: center;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      footer a {
+        color: var(--accent);
+      }
+
+      section.doc code {
+        font-family: var(--mono);
+        font-size: 0.85em;
+        padding: 0.05rem 0.3rem;
+        border-radius: 0.3rem;
+        background: var(--bg);
+        border: 1px solid var(--border);
       }
     </style>
   </head>
+
   <body>
-    <div class="container">
-      <div class="welcome-text">
-        <h1>🎉 恭喜！Chatlog 服务已成功启动</h1>
-        <p>
-          Chatlog 是一个帮助你轻松使用自己聊天数据的工具，现在你可以通过 HTTP
-          API 访问你的聊天记录、联系人和群聊信息。
+    <div class="wrap">
+      <header>
+        <h1>Chatlog</h1>
+        <p class="tagline">本地微信聊天记录服务已就绪 — 下面是可直接调用的 HTTP 接口</p>
+        <p class="fork-note">
+          本服务来自 <a href="https://github.com/chenliitaz/chatlog" target="_blank" rel="noreferrer">chenliitaz/chatlog</a>，是
+          <a href="https://github.com/sjzar/chatlog" target="_blank" rel="noreferrer">sjzar/chatlog</a> 的 fork，
+          额外提供公众号汇总与聊天统计。所有数据均在本机处理，不上传任何聊天内容。
         </p>
-      </div>
+      </header>
 
-      <div class="biz-entry">
-        <a href="/biz">📚 公众号文章库 →</a>
-        <span>浏览、汇总、归档你关注的公众号文章</span>
-      </div>
+      <nav class="tabs" id="tabs" role="tablist"></nav>
 
-      <div class="api-section">
-        <h2>🔍 API 接口与调试</h2>
-
-        <div class="api-tester">
-          <div class="tab-container">
-            <div class="tab active" data-tab="session">最近会话</div>
-            <div class="tab" data-tab="chatroom">群聊</div>
-            <div class="tab" data-tab="contact">联系人</div>
-            <div class="tab" data-tab="chatlog">聊天记录</div>
+      <div class="card">
+        <p class="desc" id="tab-desc"></p>
+        <form id="api-form" autocomplete="off">
+          <div class="grid" id="fields"></div>
+          <div class="actions">
+            <button type="submit" class="primary" id="submit-btn">执行查询</button>
+            <button type="button" class="ghost" id="copy-curl">复制 curl 命令</button>
           </div>
+        </form>
 
-          <!-- 会话查询表单 -->
-          <div class="tab-content active" id="session-tab">
-            <div class="api-description">
-              <p>
-                查询最近会话列表。<span class="badge">GET /api/v1/session</span>
-              </p>
-            </div>
-            <div class="form-group">
-              <label for="session-format"
-                >输出格式：<span class="optional-param">可选</span></label
-              >
-              <select id="session-format">
-                <option value="">默认</option>
-                <option value="json">JSON</option>
-                <option value="text">纯文本</option>
-              </select>
-            </div>
+        <div id="outcome">
+          <div class="url-line">
+            <code id="req-url"></code>
+            <button type="button" class="ghost" id="copy-url">复制 URL</button>
           </div>
-
-          <!-- 群聊查询表单 -->
-          <div class="tab-content" id="chatroom-tab">
-            <div class="api-description">
-              <p>
-                查询群聊列表，可选择性地按关键词搜索。<span class="badge"
-                  >GET /api/v1/chatroom</span
-                >
-              </p>
-            </div>
-            <div class="form-group">
-              <label for="chatroom-keyword"
-                >搜索群聊：<span class="optional-param">可选</span></label
-              >
-              <input
-                type="text"
-                id="chatroom-keyword"
-                placeholder="输入关键词搜索群聊"
-              />
-            </div>
-            <div class="form-group">
-              <label for="chatroom-format"
-                >输出格式：<span class="optional-param">可选</span></label
-              >
-              <select id="chatroom-format">
-                <option value="">默认</option>
-                <option value="json">JSON</option>
-                <option value="text">纯文本</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- 联系人查询表单 -->
-          <div class="tab-content" id="contact-tab">
-            <div class="api-description">
-              <p>
-                查询联系人列表，可选择性地按关键词搜索。<span class="badge"
-                  >GET /api/v1/contact</span
-                >
-              </p>
-            </div>
-            <div class="form-group">
-              <label for="contact-keyword"
-                >搜索联系人：<span class="optional-param">可选</span></label
-              >
-              <input
-                type="text"
-                id="contact-keyword"
-                placeholder="输入关键词搜索联系人"
-              />
-            </div>
-            <div class="form-group">
-              <label for="contact-format"
-                >输出格式：<span class="optional-param">可选</span></label
-              >
-              <select id="contact-format">
-                <option value="">默认</option>
-                <option value="json">JSON</option>
-                <option value="text">纯文本</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- 聊天记录查询表单 -->
-          <div class="tab-content" id="chatlog-tab">
-            <div class="api-description">
-              <p>
-                查询指定时间范围内与特定联系人或群聊的聊天记录。<span
-                  class="badge"
-                  >GET /api/v1/chatlog</span
-                >
-              </p>
-            </div>
-            <div class="form-group">
-              <label for="time"
-                >时间范围：<span class="required-field">*</span></label
-              >
-              <input
-                type="text"
-                id="time"
-                placeholder="例如：2023-01-01 或 2023-01-01~2023-01-31"
-              />
-            </div>
-            <div class="form-group">
-              <label for="talker"
-                >聊天对象：<span class="required-field">*</span></label
-              >
-              <input
-                type="text"
-                id="talker"
-                placeholder="wxid、群ID、备注名或昵称"
-              />
-            </div>
-            <div class="form-group">
-              <label for="sender"
-                >发送者：<span class="optional-param">可选</span></label
-              >
-              <input
-                type="text"
-                id="sender"
-                placeholder="指定消息发送者"
-              />
-            </div>
-            <div class="form-group">
-              <label for="keyword"
-                >关键词：<span class="optional-param">可选</span></label
-              >
-              <input
-                type="text"
-                id="keyword"
-                placeholder="搜索消息内容中的关键词"
-              />
-            </div>
-            <div class="form-group">
-              <label for="limit"
-                >返回数量：<span class="optional-param">可选</span></label
-              >
-              <input type="number" id="limit" placeholder="默认不做限制" />
-            </div>
-            <div class="form-group">
-              <label for="offset"
-                >偏移量：<span class="optional-param">可选</span></label
-              >
-              <input type="number" id="offset" placeholder="默认 0" />
-            </div>
-            <div class="form-group">
-              <label for="format"
-                >输出格式：<span class="optional-param">可选</span></label
-              >
-              <select id="format">
-                <option value="">默认</option>
-                <option value="text">纯文本</option>
-                <option value="json">JSON</option>
-                <option value="csv">CSV</option>
-              </select>
-            </div>
-          </div>
-
-          <button id="test-api">执行查询</button>
-
-          <div id="result-wrapper" style="display: none; margin-top: 20px">
-            <div class="request-url" id="request-url-container">
-              <span class="url-text" id="request-url"></span>
-              <button class="copy-button copy-url-button" id="copy-url">
-                复制请求URL
-              </button>
-            </div>
-            <div class="result-container" id="api-result">
-              <p>查询结果将显示在这里...</p>
-            </div>
-            <div class="button-group">
-              <button class="copy-button" id="copy-result">复制结果</button>
-            </div>
-          </div>
-          <div class="error-message" id="error-message"></div>
+          <pre id="result"></pre>
         </div>
       </div>
 
-      <div class="api-section">
+      <section class="doc">
         <h2>🤖 MCP 集成</h2>
         <p>
-          Chatlog 支持 MCP (Model Context Protocol) SSE 协议，可与支持 MCP 的 AI
-          助手无缝集成。
+          本服务同时提供两种 MCP 传输方式，接入 AI 助手时优先用第一种：
         </p>
-        <p>SSE 端点：<strong>/sse</strong></p>
+        <ul>
+          <li>
+            <strong>Streamable HTTP</strong>（推荐）：<code>/mcp</code> —
+            ChatWise、Cherry Studio 等支持 Streamable HTTP 的客户端直接填这个地址即可。
+          </li>
+          <li>
+            <strong>SSE</strong>（兼容旧客户端）：<code>/sse</code> — 仅在客户端不支持
+            Streamable HTTP 时使用，Claude Desktop 一类需要配合 mcp-proxy 转发。
+          </li>
+        </ul>
         <p>
-          详细集成指南请参考
-          <a
-            href="https://github.com/chenliitaz/chatlog/blob/main/docs/mcp.md"
-            class="docs-link"
-            target="_blank"
-            >MCP 集成指南</a
-          >
+          各平台的完整配置步骤见
+          <a href="https://github.com/chenliitaz/chatlog/blob/main/docs/mcp.md" target="_blank" rel="noreferrer">MCP 集成指南</a>。
         </p>
-      </div>
+      </section>
 
-      <div class="api-section">
-        <h2>📚 更多资源</h2>
-        <p>
-          查看
-          <a
-            href="https://github.com/chenliitaz/chatlog"
-            class="docs-link"
-            target="_blank"
-            >GitHub 项目</a
-          >
-          获取完整文档和使用指南。
+      <section class="doc">
+        <h2>📚 更多入口</h2>
+        <div class="link-row">
+          <a id="lnk-biz" href="/biz" target="_blank" rel="noreferrer">公众号汇总界面</a>
+          <a href="https://github.com/chenliitaz/chatlog" target="_blank" rel="noreferrer">项目主页</a>
+          <a href="https://github.com/chenliitaz/chatlog/blob/main/docs/mcp.md" target="_blank" rel="noreferrer">MCP 集成指南</a>
+          <a href="https://github.com/chenliitaz/chatlog/blob/main/docs/prompt.md" target="_blank" rel="noreferrer">Prompt 示例</a>
+          <a href="https://github.com/chenliitaz/chatlog/discussions" target="_blank" rel="noreferrer">Discussions</a>
+        </div>
+        <p style="margin-top: 0.9rem">
+          健康检查：<code>GET /health</code> · 媒体资源：<code>/image/&lt;id&gt;</code>、
+          <code>/video/&lt;id&gt;</code>、<code>/voice/&lt;id&gt;</code>、<code>/file/&lt;id&gt;</code>
         </p>
-        <p>
-          如果你有任何问题或建议，欢迎通过
-          <a
-            href="https://github.com/chenliitaz/chatlog/discussions"
-            class="docs-link"
-            target="_blank"
-            >Discussions</a
-          >
-          进行交流。
-        </p>
-      </div>
+      </section>
+
+      <footer>
+        Apache-2.0 · 仅供学习研究使用，请遵守
+        <a href="https://github.com/chenliitaz/chatlog/blob/main/DISCLAIMER.md" target="_blank" rel="noreferrer">免责声明</a>
+      </footer>
     </div>
 
     <script>
-      // 标签切换功能
-      document.querySelectorAll(".tab").forEach((tab) => {
-        tab.addEventListener("click", function () {
-          // 移除所有标签的活动状态
-          document
-            .querySelectorAll(".tab")
-            .forEach((t) => t.classList.remove("active"));
-          // 设置当前标签为活动状态
-          this.classList.add("active");
+      // ── 鉴权 token ────────────────────────────────────────────────
+      // 页面本身靠 ?token= 打开（页面路由不走鉴权组），但页面发出的 fetch
+      // 不会自动带上 query —— 不显式补 header 的话，配了 auth_token 的部署
+      // 每次点击「执行查询」都会 401。
+      const qs = new URLSearchParams(location.search);
+      const TOKEN = qs.get("token") || "";
 
-          // 隐藏所有内容区域
-          document.querySelectorAll(".tab-content").forEach((content) => {
-            content.classList.remove("active");
+      if (TOKEN) {
+        // 把 token 补进站内链接，否则点过去就是未授权页面
+        for (const a of document.querySelectorAll('a[href^="/"]')) {
+          const u = new URL(a.getAttribute("href"), location.origin);
+          u.searchParams.set("token", TOKEN);
+          a.href = u.pathname + u.search;
+        }
+      }
+
+      function authHeaders() {
+        return TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
+      }
+
+      // ── 接口定义 ─────────────────────────────────────────────────
+      // 字段与 internal/chatlog/http/route.go 里各 handler 的 form tag 一一对应，
+      // 改后端绑定时这里要同步。
+      const FORMAT = {
+        type: "select",
+        label: "输出格式",
+        options: [
+          ["", "默认（纯文本）"],
+          ["json", "JSON"],
+          ["csv", "CSV"],
+        ],
+      };
+
+      const TABS = [
+        {
+          id: "chatlog",
+          label: "聊天记录",
+          method: "GET",
+          path: "/api/v1/chatlog",
+          desc: "查询指定时间范围内与特定联系人或群聊的聊天记录。",
+          fields: [
+            { name: "time", label: "时间范围", required: true, placeholder: "2023-01-01 或 2023-01-01~2023-01-31" },
+            { name: "talker", label: "聊天对象", required: true, placeholder: "wxid、群 ID、备注名或昵称" },
+            { name: "sender", label: "发送者", placeholder: "只想看某个人发的消息" },
+            { name: "keyword", label: "关键词", placeholder: "在消息内容中搜索" },
+            { name: "limit", label: "返回数量", type: "number", placeholder: "默认不限制" },
+            { name: "offset", label: "偏移量", type: "number", value: "0" },
+            FORMAT,
+          ],
+        },
+        {
+          id: "contact",
+          label: "联系人",
+          method: "GET",
+          path: "/api/v1/contact",
+          desc: "查询联系人列表，支持按备注名、昵称或 wxid 搜索。",
+          fields: [
+            { name: "keyword", label: "搜索关键词", placeholder: "留空返回全部" },
+            { name: "limit", label: "返回数量", type: "number" },
+            { name: "offset", label: "偏移量", type: "number", value: "0" },
+            FORMAT,
+          ],
+        },
+        {
+          id: "chatroom",
+          label: "群聊",
+          method: "GET",
+          path: "/api/v1/chatroom",
+          desc: "查询已加入的群聊列表。",
+          fields: [
+            { name: "keyword", label: "搜索关键词", placeholder: "群名或群 ID" },
+            { name: "limit", label: "返回数量", type: "number" },
+            { name: "offset", label: "偏移量", type: "number", value: "0" },
+            FORMAT,
+          ],
+        },
+        {
+          id: "session",
+          label: "最近会话",
+          method: "GET",
+          path: "/api/v1/session",
+          desc: "查询最近的会话列表，即聊天列表顶部的那些条目。",
+          fields: [
+            { name: "keyword", label: "搜索关键词", placeholder: "留空返回全部" },
+            { name: "limit", label: "返回数量", type: "number" },
+            { name: "offset", label: "偏移量", type: "number", value: "0" },
+            FORMAT,
+          ],
+        },
+        {
+          id: "stat",
+          label: "聊天统计",
+          method: "GET",
+          path: "/api/v1/chatlog/stat",
+          desc: "统计最近一段时间的活跃聊天对象、关键词与消息样本。仅返回统计结果，不含原文。",
+          fields: [
+            { name: "days", label: "统计天数", type: "number", value: "7", placeholder: "默认 7，最大 90" },
+            { name: "top", label: "返回对象数", type: "number", value: "20", placeholder: "默认 20，最大 100" },
+            { name: "limit", label: "每对象采样消息数", type: "number", value: "200", placeholder: "默认 200，最大 1000" },
+          ],
+        },
+        {
+          id: "bizchatlog",
+          label: "公众号文章",
+          method: "GET",
+          path: "/api/v1/bizchatlog",
+          desc: "查询公众号（bizhub）文章记录，需要已启用公众号汇总模块。",
+          fields: [
+            { name: "time", label: "时间范围", required: true, placeholder: "2023-01-01 或 2023-01-01~2023-01-31" },
+            { name: "talker", label: "公众号 ID", required: true, placeholder: "gh_xxxxxxxx" },
+            { name: "limit", label: "返回数量", type: "number" },
+            FORMAT,
+          ],
+        },
+      ];
+
+      // ── 渲染 ─────────────────────────────────────────────────────
+      const $ = (id) => document.getElementById(id);
+      const tabsEl = $("tabs");
+      const fieldsEl = $("fields");
+      const descEl = $("tab-desc");
+      const formEl = $("api-form");
+      const outcomeEl = $("outcome");
+      let active = TABS[0];
+
+      function renderTabs() {
+        tabsEl.innerHTML = "";
+        for (const t of TABS) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.role = "tab";
+          b.textContent = t.label;
+          b.setAttribute("aria-selected", String(t === active));
+          b.addEventListener("click", () => {
+            active = t;
+            renderTabs();
+            renderFields();
+            outcomeEl.style.display = "none";
           });
+          tabsEl.appendChild(b);
+        }
+      }
 
-          // 显示当前标签对应的内容
-          const tabId = this.getAttribute("data-tab") + "-tab";
-          document.getElementById(tabId).classList.add("active");
+      function renderFields() {
+        descEl.innerHTML =
+          '<span class="endpoint">' + active.method + " " + active.path + "</span><br />" + active.desc;
+        fieldsEl.innerHTML = "";
+        for (const f of active.fields) {
+          const wrap = document.createElement("div");
+          wrap.className = "field";
+          const id = "f-" + f.name;
+          const label = document.createElement("label");
+          label.htmlFor = id;
+          label.textContent = f.label;
+          if (!f.required) {
+            const s = document.createElement("span");
+            s.className = "opt";
+            s.textContent = "可选";
+            label.appendChild(s);
+          }
+          let input;
+          if (f.type === "select") {
+            input = document.createElement("select");
+            for (const [v, t] of f.options) {
+              const o = document.createElement("option");
+              o.value = v;
+              o.textContent = t;
+              input.appendChild(o);
+            }
+          } else {
+            input = document.createElement("input");
+            input.type = f.type === "number" ? "number" : "text";
+            if (f.placeholder) input.placeholder = f.placeholder;
+          }
+          input.id = id;
+          input.name = f.name;
+          if (f.value !== undefined) input.value = f.value;
+          if (f.required) input.required = true;
+          wrap.appendChild(label);
+          wrap.appendChild(input);
+          fieldsEl.appendChild(wrap);
+        }
+      }
 
-          // 清空结果区域
-          document.getElementById("result-wrapper").style.display = "none";
-          document.getElementById("api-result").innerHTML =
-            "<p>查询结果将显示在这里...</p>";
-          document.getElementById("request-url").textContent = "";
-          document.getElementById("error-message").style.display = "none";
-          document.getElementById("error-message").textContent = "";
-        });
+      // 只带非空参数：空串会让后端的 BindQuery 把 offset 之类的默认值吃掉
+      function buildURL() {
+        const p = new URLSearchParams();
+        for (const el of fieldsEl.querySelectorAll("input,select")) {
+          if (el.value !== "") p.set(el.name, el.value);
+        }
+        const q = p.toString();
+        return location.origin + active.path + (q ? "?" + q : "");
+      }
+
+      function curlFor(url) {
+        const u = new URL(url);
+        const parts = ["curl -sS '" + u.origin + u.pathname + "'"];
+        if (u.search) parts.push("  " + [...u.searchParams].map(([k, v]) => "-G --data-urlencode '" + k + "=" + v.replace(/'/g, "'\\''") + "'").join(" \\\n  "));
+        if (TOKEN) parts.push("  -H 'Authorization: Bearer " + TOKEN.replace(/'/g, "'\\''") + "'");
+        return parts.join(" \\\n");
+      }
+
+      async function copy(text, btn) {
+        const old = btn.textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = "已复制";
+        } catch {
+          btn.textContent = "复制失败，请手动选取";
+        }
+        setTimeout(() => (btn.textContent = old), 1400);
+      }
+
+      formEl.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const btn = $("submit-btn");
+        const url = buildURL();
+        $("req-url").textContent = url;
+        $("result").textContent = "查询中…";
+        $("result").className = "";
+        outcomeEl.style.display = "block";
+        btn.disabled = true;
+        try {
+          const res = await fetch(url, { headers: authHeaders() });
+          const body = await res.text();
+          if (!res.ok) {
+            $("result").className = "err";
+            let hint = "HTTP " + res.status;
+            if (res.status === 401) hint += " —— token 缺失或不匹配，请用 ?token=<auth_token> 打开本页";
+            else if (res.status === 503) hint += " —— 数据库尚未就绪，先在 TUI 里完成解密";
+            $("result").textContent = hint + "\n\n" + body;
+            return;
+          }
+          $("result").textContent = body;
+        } catch (err) {
+          $("result").className = "err";
+          $("result").textContent = "请求失败：" + err;
+        } finally {
+          btn.disabled = false;
+        }
       });
 
-      // API 测试功能
-      document
-        .getElementById("test-api")
-        .addEventListener("click", async function () {
-          const resultContainer = document.getElementById("api-result");
-          const requestUrlContainer = document.getElementById("request-url");
-          const errorMessage = document.getElementById("error-message");
-          const resultWrapper = document.getElementById("result-wrapper");
+      $("copy-url").addEventListener("click", (e) => copy($("req-url").textContent, e.target));
+      $("copy-curl").addEventListener("click", (e) => copy(curlFor(buildURL()), e.target));
 
-          errorMessage.style.display = "none";
-          errorMessage.textContent = "";
-
-          try {
-            // 获取当前活动的标签
-            const activeTab = document
-              .querySelector(".tab.active")
-              .getAttribute("data-tab");
-            let url = "/api/v1/";
-            let params = new URLSearchParams();
-
-            // 根据不同的标签构建不同的请求
-            switch (activeTab) {
-              case "chatlog":
-                url += "chatlog";
-                const time = document.getElementById("time").value;
-                const talker = document.getElementById("talker").value;
-                const sender = document.getElementById("sender").value;
-                const keyword = document.getElementById("keyword").value;
-                const limit = document.getElementById("limit").value;
-                const offset = document.getElementById("offset").value;
-                const format = document.getElementById("format").value;
-
-                // 验证必填项
-                if (!time || !talker) {
-                  errorMessage.textContent =
-                    "错误: 时间范围和聊天对象为必填项！";
-                  errorMessage.style.display = "block";
-                  return;
-                }
-
-                if (time) params.append("time", time);
-                if (talker) params.append("talker", talker);
-                if (sender) params.append("sender", sender);
-                if (keyword) params.append("keyword", keyword);
-                if (limit) params.append("limit", limit);
-                if (offset) params.append("offset", offset);
-                if (format) params.append("format", format);
-                break;
-
-              case "contact":
-                url += "contact";
-                const contactKeyword =
-                  document.getElementById("contact-keyword").value;
-                const contactFormat =
-                  document.getElementById("contact-format").value;
-
-                if (contactKeyword) params.append("keyword", contactKeyword);
-                if (contactFormat) params.append("format", contactFormat);
-                break;
-
-              case "chatroom":
-                url += "chatroom";
-                const chatroomKeyword =
-                  document.getElementById("chatroom-keyword").value;
-                const chatroomFormat =
-                  document.getElementById("chatroom-format").value;
-
-                if (chatroomKeyword) params.append("keyword", chatroomKeyword);
-                if (chatroomFormat) params.append("format", chatroomFormat);
-                break;
-
-              case "session":
-                url += "session";
-                const sessionFormat =
-                  document.getElementById("session-format").value;
-
-                if (sessionFormat) params.append("format", sessionFormat);
-                break;
-            }
-
-            // 添加参数到URL
-            const apiUrl = params.toString()
-              ? `${url}?${params.toString()}`
-              : url;
-
-            // 获取完整URL（包含域名部分）
-            const fullUrl = window.location.origin + apiUrl;
-
-            // 显示完整请求URL
-            requestUrlContainer.textContent = fullUrl;
-            resultWrapper.style.display = "block";
-
-            // 显示加载中
-            resultContainer.innerHTML = '<div class="loading">加载中</div>';
-
-            // 发送请求
-            const response = await fetch(apiUrl);
-
-            if (!response.ok) {
-              throw new Error(`HTTP error! Status: ${response.status}`);
-            }
-
-            // 获取响应内容类型
-            const contentType = response.headers.get("content-type");
-            let result;
-
-            if (contentType && contentType.includes("application/json")) {
-              // 如果是JSON，格式化显示
-              result = await response.json();
-              resultContainer.innerHTML = JSON.stringify(result, null, 2);
-            } else {
-              // 其他格式直接显示文本
-              result = await response.text();
-              resultContainer.innerHTML = result;
-            }
-          } catch (error) {
-            resultContainer.innerHTML = "";
-            errorMessage.textContent = `查询出错: ${error.message}`;
-            errorMessage.style.display = "block";
-            console.error("API查询出错:", error);
-          }
-        });
-
-      // 复制结果功能
-      document
-        .getElementById("copy-result")
-        .addEventListener("click", function () {
-          const resultText = document.getElementById("api-result").innerText;
-          copyToClipboard(resultText, this, "已复制结果!");
-        });
-
-      // 复制URL功能
-      document
-        .getElementById("copy-url")
-        .addEventListener("click", function () {
-          // 获取完整URL（包含域名部分）
-          const urlText = document.getElementById("request-url").innerText;
-          copyToClipboard(urlText, this, "已复制URL!");
-        });
-
-      // 通用复制功能
-      function copyToClipboard(text, button, successMessage) {
-        navigator.clipboard
-          .writeText(text)
-          .then(() => {
-            const originalText = button.textContent;
-            button.textContent = successMessage;
-            setTimeout(() => {
-              button.textContent = originalText;
-            }, 2000);
-          })
-          .catch((err) => {
-            console.error("复制失败:", err);
-          });
-      }
+      renderTabs();
+      renderFields();
     </script>
   </body>
 </html>
