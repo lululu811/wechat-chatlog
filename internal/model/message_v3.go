@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sjzar/chatlog/internal/model/wxproto"
-	"github.com/sjzar/chatlog/pkg/util/lz4"
+	"github.com/chenliitaz/chatlog/internal/model/wxproto"
+	"github.com/chenliitaz/chatlog/pkg/util/lz4"
 	"google.golang.org/protobuf/proto"
 )
 

@@ -13,10 +13,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/sjzar/chatlog/internal/errors"
-	"github.com/sjzar/chatlog/pkg/util"
-	"github.com/sjzar/chatlog/pkg/util/dat2img"
-	"github.com/sjzar/chatlog/pkg/util/silk"
+	"github.com/chenliitaz/chatlog/internal/errors"
+	"github.com/chenliitaz/chatlog/pkg/util"
+	"github.com/chenliitaz/chatlog/pkg/util/dat2img"
+	"github.com/chenliitaz/chatlog/pkg/util/silk"
 )
 
 // EFS holds embedded file system data for static assets.

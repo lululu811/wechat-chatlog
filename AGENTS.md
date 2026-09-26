@@ -2,7 +2,7 @@
 
 聊天记录工具 — 微信本地数据库解密、TUI / HTTP API / MCP 服务，支持多账号、图片/语音 (wxgf/silk) 解码。
 
-Module: `github.com/sjzar/chatlog` · Go 1.24 · CGO required (mattn/go-sqlite3, go-silk, go-lame)
+Module: `github.com/chenliitaz/chatlog` · Go 1.24 · CGO required (mattn/go-sqlite3, go-silk, go-lame)
 
 ## Setup commands
 
@@ -29,6 +29,7 @@ CGO 必须开启；交叉编译前确认目标平台 C 工具链可用（linux �
 - `internal/model/` — 业务模型与 DTO
 - `internal/errors/` — 统一错误类型
 - `pkg/{appver,config,filecopy,filemonitor,util,version}/` — 可复用工具
+- `frontend/` — bizhub 前端（Vue 3 + Vite），产物 build 到 `internal/chatlog/bizhub/static/dist/` 后由 go:embed 打包
 - `script/` — 打包 / docker entrypoint
 - `docs/` — `docker.md`、`mcp.md`、`prompt.md`
 

@@ -18,9 +18,9 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 
-	"github.com/sjzar/chatlog/internal/chatlog/bizhub/imapush"
-	"github.com/sjzar/chatlog/internal/chatlog/bizhub/mdexport"
-	"github.com/sjzar/chatlog/internal/model"
+	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/imapush"
+	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/mdexport"
+	"github.com/chenliitaz/chatlog/internal/model"
 )
 
 // HashURL 返回 URL 的 md5 hex 哈希（用于 biz_article_contents 主键）
@@ -71,10 +71,18 @@ type Article struct {
 	// 5 阶段正态：pending → fetched → md_exported → summarized → pushed
 	// 失败态：failed:fetch / failed:mdexport / failed:summarize / failed:imapush
 	// 详见 pipeline.go 的状态常量定义。
-	PipelineStatus     string `json:"pipelineStatus,omitempty"`
-	PipelineError      string `json:"pipelineError,omitempty"`
-	PipelineAttempt    int    `json:"pipelineAttempt,omitempty"`
-	PipelineUpdatedAt  int64  `json:"pipelineUpdatedAt,omitempty"`
+	PipelineStatus    string `json:"pipelineStatus,omitempty"`
+	PipelineError     string `json:"pipelineError,omitempty"`
+	PipelineAttempt   int    `json:"pipelineAttempt,omitempty"`
+	PipelineUpdatedAt int64  `json:"pipelineUpdatedAt,omitempty"`
+
+	// 正文与 AI 摘要（单篇详情查看时动态装载）
+	Content    string   `json:"content,omitempty"`
+	Digest     string   `json:"digest,omitempty"`
+	Highlights []string `json:"highlights,omitempty"`
+	Themes     []string `json:"themes,omitempty"`
+	Keywords   []string `json:"keywords,omitempty"`
+	MustRead   int      `json:"mustRead,omitempty"`
 }
 
 // Summary 关注公众号文章的 LLM 汇总
@@ -854,6 +862,7 @@ func (s *Store) SetAccountsWatched(ghIDs []string, watched bool) error {
 // 两个条件都可选：GHID 为空即全部公众号，Days <= 0 即不限时间。
 type ArticleFilter struct {
 	GHID       string
+	TagID      int64
 	Days       int
 	Limit      int
 	Offset     int
@@ -878,6 +887,10 @@ func articleWhere(f ArticleFilter) (string, []any) {
 	if f.GHID != "" {
 		conds = append(conds, "a.gh_id = ?")
 		args = append(args, f.GHID)
+	}
+	if f.TagID > 0 {
+		conds = append(conds, "a.gh_id IN (SELECT gh_id FROM biz_account_tags WHERE tag_id = ?)")
+		args = append(args, f.TagID)
 	}
 	if f.Days > 0 {
 		conds = append(conds, "a.published_at >= ?")
@@ -1442,12 +1455,12 @@ func (s *Store) GetLatestFeedSummary(windowDays int) (headline, structured strin
 
 // DailyDigest 每日精选结果
 type DailyDigest struct {
-	ID         int64    `json:"id"`
-	DigestDate string   `json:"digestDate"`
-	Headline   string   `json:"headline"`
+	ID         int64        `json:"id"`
+	DigestDate string       `json:"digestDate"`
+	Headline   string       `json:"headline"`
 	Picks      []DigestPick `json:"picks"`
-	ArticleIDs []int64  `json:"articleIds"`
-	ComputedAt int64    `json:"computedAt"`
+	ArticleIDs []int64      `json:"articleIds"`
+	ComputedAt int64        `json:"computedAt"`
 }
 
 // DigestPick 单篇精选
@@ -2028,25 +2041,25 @@ func (s *Store) AutoTagAccounts() error {
 	// 匹配顺序影响结果：越具体的越靠前。"股市投资"和"产业行业"放在最前面，
 	// 因为它们比"金融"更精准 —— 否则"广发证券"会被"金融"先吃掉。
 	rules := map[string][]string{
-		"股市投资": {"ETF", "策市", "看市", "解盘", "后势", "研报", "大户室", "盘前", "指数投资", "价值投资", "期货投研", "金融工程", "策略研究", "券商中国", "证券报", "基金报", "银河策略", "证券", "中金", "华泰睿思", "华尔街见闻", "财经世界"},
-		"产业行业": {"产业", "行业观察", "产业链", "半导体", "投研笔记", "科技评论", "光电前瞻", "光互连", "金属加工", "新能源", "非金属矿", "算力", "信创", "TMT", "远川科技"},
-		"交通出行": {"航空", "机场", "铁路", "12306", "速运", "快递", "闪送", "滴滴", "出行", "公交", "公路客运", "快运"},
-		"消费品牌": {"京东", "肯德基", "瑞幸", "MUJI", "无印良品", "迪卡侬", "名创优品", "汉堡王", "茅台", "影城", "影院", "信用卡"},
-		"新疆本地": {"新疆", "乌鲁木齐", "库尔勒", "疆内", "巴州", "天山行"},
+		"股市投资":   {"ETF", "策市", "看市", "解盘", "后势", "研报", "大户室", "盘前", "指数投资", "价值投资", "期货投研", "金融工程", "策略研究", "券商中国", "证券报", "基金报", "银河策略", "证券", "中金", "华泰睿思", "华尔街见闻", "财经世界"},
+		"产业行业":   {"产业", "行业观察", "产业链", "半导体", "投研笔记", "科技评论", "光电前瞻", "光互连", "金属加工", "新能源", "非金属矿", "算力", "信创", "TMT", "远川科技"},
+		"交通出行":   {"航空", "机场", "铁路", "12306", "速运", "快递", "闪送", "滴滴", "出行", "公交", "公路客运", "快运"},
+		"消费品牌":   {"京东", "肯德基", "瑞幸", "MUJI", "无印良品", "迪卡侬", "名创优品", "汉堡王", "茅台", "影城", "影院", "信用卡"},
+		"新疆本地":   {"新疆", "乌鲁木齐", "库尔勒", "疆内", "巴州", "天山行"},
 		"工具SaaS": {"Apifox", "ProcessOn", "墨刀", "CSDN", "51CTO", "牛客网", "PMO", "项目管理", "易企秀", "讯飞智文", "脚本之家"},
-		"自媒体": {"自修", "小菜", "课代表", "狮兄", "戴老板", "土狗"},
-		"影视内容": {"美剧", "大片", "DOTA", "崩坏", "HIPHOP"},
-		"公用事业": {"移动", "电信", "联通", "供水", "药房", "大药房", "疾控", "码上检"},
-		"旅行票务": {"旅行", "票务", "同程", "飞常准"},
-		"文化阅读": {"博物馆", "美术馆", "Kindle", "阅读室"},
-		"城市服务": {"本地宝", "城市通卡", "普法", "保密观", "公积金", "人社", "招生"},
-		"新闻": {"日报", "晚报", "晨报", "新闻", "时报", "周刊", "杂志", "观察", "记者", "爆料"},
-		"技术": {"程序", "代码", "开发", "技术", "架构", "算法", "AI", "互联网", "科技", "软件", "开源", "GitHub", "Java", "Python", "前端", "后端"},
-		"金融": {"金融", "银行", "证券", "基金", "保险", "投资", "理财", "股票", "期货", "信托", "支付", "财经", "经济"},
-		"政府": {"政府", "国家", "局", "委", "厅", "公安", "税务", "社保", "政务", "发布", "官方"},
-		"生活": {"生活", "服务", "便民", "医疗", "健康", "出行", "交通", "快递", "购物", "餐饮", "旅游"},
-		"娱乐": {"娱乐", "影视", "音乐", "游戏", "动漫", "明星", "综艺", "电影", "电视"},
-		"教育": {"教育", "学校", "大学", "学院", "培训", "考试", "学习", "知识"},
+		"自媒体":    {"自修", "小菜", "课代表", "狮兄", "戴老板", "土狗"},
+		"影视内容":   {"美剧", "大片", "DOTA", "崩坏", "HIPHOP"},
+		"公用事业":   {"移动", "电信", "联通", "供水", "药房", "大药房", "疾控", "码上检"},
+		"旅行票务":   {"旅行", "票务", "同程", "飞常准"},
+		"文化阅读":   {"博物馆", "美术馆", "Kindle", "阅读室"},
+		"城市服务":   {"本地宝", "城市通卡", "普法", "保密观", "公积金", "人社", "招生"},
+		"新闻":     {"日报", "晚报", "晨报", "新闻", "时报", "周刊", "杂志", "观察", "记者", "爆料"},
+		"技术":     {"程序", "代码", "开发", "技术", "架构", "算法", "AI", "互联网", "科技", "软件", "开源", "GitHub", "Java", "Python", "前端", "后端"},
+		"金融":     {"金融", "银行", "证券", "基金", "保险", "投资", "理财", "股票", "期货", "信托", "支付", "财经", "经济"},
+		"政府":     {"政府", "国家", "局", "委", "厅", "公安", "税务", "社保", "政务", "发布", "官方"},
+		"生活":     {"生活", "服务", "便民", "医疗", "健康", "出行", "交通", "快递", "购物", "餐饮", "旅游"},
+		"娱乐":     {"娱乐", "影视", "音乐", "游戏", "动漫", "明星", "综艺", "电影", "电视"},
+		"教育":     {"教育", "学校", "大学", "学院", "培训", "考试", "学习", "知识"},
 	}
 
 	for _, acc := range accounts {
@@ -2157,8 +2170,8 @@ func (s *Store) UpsertExportRecord(articleID int64, sourceURL, mdPath, summaryPa
 // push_failed 不是终态。下次批量推送会把 push_failed 重新纳入候选（除非
 // attempts 用尽或失败类型是「需人工处理」）。
 const (
-	PushStatusPushed  = "pushed"
-	PushStatusFailed  = "push_failed"
+	PushStatusPushed = "pushed"
+	PushStatusFailed = "push_failed"
 )
 
 // maxPushAttempts 推送自动重试上限。
@@ -2320,10 +2333,11 @@ func (s *Store) GetExportRecordsByArticleIDs(ids []int64) (map[int64]*ExportedAr
 // 因为它依赖 mdexport 的失败分类，塞进 SQL 会把分类逻辑复制两遍。
 const ExportCandidateWhere = `a.published_at >= ? 
 		  AND (e.id IS NULL OR e.status = 'failed')
+		  AND (e.status IS NULL OR e.status NOT IN ('exported', 'summary_generated'))
 		  AND a.gh_id NOT IN (SELECT gh_id FROM biz_accounts WHERE hidden = 1)`
 
 // GetUnexportedArticles 获取最近 days 天内仍需要归档的文章（用于批量导出/迁移）
-func (s *Store) GetUnexportedArticles(days, limit int) ([]Article, error) {
+func (s *Store) GetUnexportedArticles(days, limit int, ghids ...string) ([]Article, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -2335,16 +2349,28 @@ func (s *Store) GetUnexportedArticles(days, limit int) ([]Article, error) {
 	}
 
 	since := time.Now().AddDate(0, 0, -days).Unix()
+	where := ExportCandidateWhere
+	args := []any{since}
+	if len(ghids) > 0 {
+		placeholders := make([]string, len(ghids))
+		for i, g := range ghids {
+			placeholders[i] = "?"
+			args = append(args, g)
+		}
+		where += " AND a.gh_id IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	args = append(args, limit)
+
 	rows, err := s.db.Query(`
 		SELECT a.id, a.gh_id, acc.gh_name, a.title, a.description, a.url, a.app_id, a.local_type, a.local_id, a.sort_seq, a.published_at, a.synced_at, a.bookmarked, a.is_read,
 		       COALESCE(e.status, ''), COALESCE(e.pushed_status, '')
 		FROM biz_articles a
 		LEFT JOIN biz_accounts acc ON a.gh_id = acc.gh_id
 		LEFT JOIN biz_exported_articles e ON a.id = e.article_id
-		WHERE `+ExportCandidateWhere+`
+		WHERE `+where+`
 		ORDER BY a.published_at DESC
 		LIMIT ?
-	`, since, limit)
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2829,7 +2855,7 @@ func (s *Store) GetPushableArticles(days, limit int) ([]Article, error) {
 
 // PushStats 推送统计（管理页顶部）
 type PushStats struct {
-	Pushed int `json:"pushed"`
+	Pushed  int `json:"pushed"`
 	Pending int `json:"pending"`
 	Blocked int `json:"blocked"`
 	Days    int `json:"days"`

@@ -29,18 +29,18 @@ import (
 
 // Pipeline 状态常量。与 store.go 的 pipelinePickableStatuses 协同。
 const (
-	PipelinePending     = "pending"
-	PipelineFetched     = "fetched"
-	PipelineMDExported  = "md_exported"
-	PipelineSummarized  = "summarized"
-	PipelinePushed      = "pushed"
+	PipelinePending    = "pending"
+	PipelineFetched    = "fetched"
+	PipelineMDExported = "md_exported"
+	PipelineSummarized = "summarized"
+	PipelinePushed     = "pushed"
 
 	// 失败态。Worker 只把文章推到这些状态，**不**从这里恢复——
 	// 恢复必须由 /admin/pipeline/retry/:id 显式触发。
-	PipelineFailedFetch    = "failed:fetch"
-	PipelineFailedMdexport = "failed:mdexport"
+	PipelineFailedFetch     = "failed:fetch"
+	PipelineFailedMdexport  = "failed:mdexport"
 	PipelineFailedSummarize = "failed:summarize"
-	PipelineFailedImapush  = "failed:imapush"
+	PipelineFailedImapush   = "failed:imapush"
 )
 
 // Pipeline 阶段名常量。和 shouldRunStage / MarkPipelineFailed 配套。
@@ -79,15 +79,16 @@ func nextStatusAfter(stage string) string {
 // shouldRunStage 给定当前 pipeline_status，决定 stage 是否应该被本轮 advance 触发。
 //
 // 规则：
-//   pending → fetch
-//   fetched → mdexport
-//   md_exported → summarize
-//   summarized → imapush
-//   failed:fetch → fetch（重试）
-//   failed:mdexport → mdexport（重试）
-//   failed:summarize → summarize（重试）
-//   failed:imapush → imapush（重试）
-//   pushed / 其他 → 不跑任何 stage
+//
+//	pending → fetch
+//	fetched → mdexport
+//	md_exported → summarize
+//	summarized → imapush
+//	failed:fetch → fetch（重试）
+//	failed:mdexport → mdexport（重试）
+//	failed:summarize → summarize（重试）
+//	failed:imapush → imapush（重试）
+//	pushed / 其他 → 不跑任何 stage
 func shouldRunStage(current, stage string) bool {
 	switch stage {
 	case StageFetch:

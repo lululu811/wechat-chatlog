@@ -29,9 +29,9 @@ var promptsFS embed.FS
 // 集中定义避免调用方拼错文件名（embed FS 的错误信息很啰嗦，集中定义后
 // typo 在编译期就报）。新增 prompt 时只要在 prompts/ 加文件 + 这里加常量。
 const (
-	PromptSummarySystem       = "summary_system"
-	PromptFeedSummarySystem   = "feed_summary_system"
-	PromptDailyDigestSystem   = "daily_digest_system"
+	PromptSummarySystem        = "summary_system"
+	PromptFeedSummarySystem    = "feed_summary_system"
+	PromptDailyDigestSystem    = "daily_digest_system"
 	PromptArticleSummarySystem = "article_summary_system"
 )
 

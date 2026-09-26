@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chenliitaz/chatlog/internal/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/sjzar/chatlog/internal/errors"
 )
 
 // FIXME 按照 region 读取效率较低，512MB 内存读取耗时约 18s(darwin 24)

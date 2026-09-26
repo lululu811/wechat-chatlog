@@ -1,0 +1,54 @@
+chatlog
+Copyright 2024 The chatlog Authors (original project: sjzar/chatlog)
+Copyright 2026 The chatlog Authors (this fork)
+
+This product includes software developed as part of the chatlog project
+(https://github.com/sjzar/chatlog), licensed under the Apache License,
+Version 2.0.
+
+--------------------------------------------------------------------------------
+Attribution
+--------------------------------------------------------------------------------
+
+This repository is a fork of sjzar/chatlog. The original project is:
+
+  chatlog — 聊天记录工具
+  https://github.com/sjzar/chatlog
+  Copyright 2024 The chatlog Authors
+  Licensed under the Apache License, Version 2.0
+
+The upstream copyright notice and license are retained in the LICENSE file
+at the root of this repository, as required by Apache-2.0 section 4(d).
+
+--------------------------------------------------------------------------------
+Modifications made in this fork
+--------------------------------------------------------------------------------
+
+Relative to upstream, this fork adds or changes:
+
+  * bizhub — 公众号（Official Account）文章汇总模块：本地解密、公众号文章
+    正文抓取、LLM 结构化摘要、收藏与关注管理
+  * 独立 Vue 3 + Vite 前端（frontend/），构建产物由 Go embed 打包进
+    internal/chatlog/bizhub/static/dist
+  * chatstat 命令 — 近期活跃 talker 与关键词统计
+  * HTTP 服务访问鉴权（token），前端请求统一走 apiFetch 补 token
+  * 数据层并发安全、查询优化与敏感信息处理加固
+  * CI（gofmt / vet / test / race / build）与 release 流程的 fork 友好化
+
+Upstream authors retain copyright in the portions they authored; the
+modifications above are licensed under the same Apache-2.0 terms.
+
+--------------------------------------------------------------------------------
+Third-party projects
+--------------------------------------------------------------------------------
+
+The upstream project credits the following projects; that credit is
+preserved here and in the README "Thanks" section:
+
+  * @0xlane   — wechat-dump-rs
+  * @xaoyaoo  — PyWxDump
+  * @git-jiadong — go-lame, go-silk
+  * Anthropic — Model Context Protocol (MCP)
+
+Dependencies retain their own licenses; see the corresponding module
+directories in the Go module cache and frontend/package.json.

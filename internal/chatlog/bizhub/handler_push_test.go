@@ -194,9 +194,9 @@ func (c *stubPushConfig) GetLLMAPIKey() string  { return "" }
 func (c *stubPushConfig) GetLLMModel() string   { return "" }
 
 // Pipeline worker（PR1）—— 测试 stub 默认不启用
-func (c *stubPushConfig) GetBizWorkerEnabled() bool   { return false }
-func (c *stubPushConfig) GetBizWorkerInterval() int   { return 0 }
-func (c *stubPushConfig) GetBizWorkerBatchSize() int  { return 0 }
+func (c *stubPushConfig) GetBizWorkerEnabled() bool  { return false }
+func (c *stubPushConfig) GetBizWorkerInterval() int  { return 0 }
+func (c *stubPushConfig) GetBizWorkerBatchSize() int { return 0 }
 
 func getFirstArticleID(t *testing.T, svc *Service) int64 {
 	t.Helper()

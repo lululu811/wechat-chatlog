@@ -1,7 +1,7 @@
 package chatlog
 
 import (
-	"github.com/sjzar/chatlog/internal/chatlog"
+	"github.com/chenliitaz/chatlog/internal/chatlog"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"

@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/chenliitaz/chatlog/pkg/config"
 	"github.com/rs/zerolog/log"
-	"github.com/sjzar/chatlog/pkg/config"
 )
 
 const (

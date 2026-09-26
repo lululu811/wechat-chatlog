@@ -5,37 +5,37 @@ const (
 )
 
 type ServerConfig struct {
-	Type                    string   `mapstructure:"type"`
-	Platform                string   `mapstructure:"platform"`
-	Version                 int      `mapstructure:"version"`
-	FullVersion             string   `mapstructure:"full_version"`
-	DataDir                 string   `mapstructure:"data_dir"`
-	DataKey                 string   `mapstructure:"data_key"`
-	ImgKey                  string   `mapstructure:"img_key"`
-	WorkDir                 string   `mapstructure:"work_dir"`
-	HTTPAddr                string   `mapstructure:"http_addr"`
-	AuthToken               string   `mapstructure:"auth_token"`
-	AutoDecrypt             bool     `mapstructure:"auto_decrypt"`
-	LLMBaseURL              string   `mapstructure:"llm_base_url"`
-	LLMAPIKey               string   `mapstructure:"llm_api_key"`
-	LLMModel                string   `mapstructure:"llm_model"`
-	LLMMaxTokens            int      `mapstructure:"llm_max_tokens"`
-	SummaryFetchContent     bool     `mapstructure:"summary_fetch_content"`
-	SummaryFetchConcurrency int      `mapstructure:"summary_fetch_concurrency"`
-	FeedSummaryCacheHours   int      `mapstructure:"feed_summary_cache_hours"`
-	MDExportDir             string   `mapstructure:"md_export_dir"`
-	MDExportScript          string   `mapstructure:"md_export_script"`
-	MDExportConcurrency     int      `mapstructure:"md_export_concurrency"`
-	IMAPushSkillDir         string   `mapstructure:"ima_push_skill_dir"`
-	IMAPushKBID             string   `mapstructure:"ima_push_kb_id"`
-	IMAPushFolderID         string   `mapstructure:"ima_push_folder_id"`
-	IMAPushConcurrency      int      `mapstructure:"ima_push_concurrency"`
+	Type                    string `mapstructure:"type"`
+	Platform                string `mapstructure:"platform"`
+	Version                 int    `mapstructure:"version"`
+	FullVersion             string `mapstructure:"full_version"`
+	DataDir                 string `mapstructure:"data_dir"`
+	DataKey                 string `mapstructure:"data_key"`
+	ImgKey                  string `mapstructure:"img_key"`
+	WorkDir                 string `mapstructure:"work_dir"`
+	HTTPAddr                string `mapstructure:"http_addr"`
+	AuthToken               string `mapstructure:"auth_token"`
+	AutoDecrypt             bool   `mapstructure:"auto_decrypt"`
+	LLMBaseURL              string `mapstructure:"llm_base_url"`
+	LLMAPIKey               string `mapstructure:"llm_api_key"`
+	LLMModel                string `mapstructure:"llm_model"`
+	LLMMaxTokens            int    `mapstructure:"llm_max_tokens"`
+	SummaryFetchContent     bool   `mapstructure:"summary_fetch_content"`
+	SummaryFetchConcurrency int    `mapstructure:"summary_fetch_concurrency"`
+	FeedSummaryCacheHours   int    `mapstructure:"feed_summary_cache_hours"`
+	MDExportDir             string `mapstructure:"md_export_dir"`
+	MDExportScript          string `mapstructure:"md_export_script"`
+	MDExportConcurrency     int    `mapstructure:"md_export_concurrency"`
+	IMAPushSkillDir         string `mapstructure:"ima_push_skill_dir"`
+	IMAPushKBID             string `mapstructure:"ima_push_kb_id"`
+	IMAPushFolderID         string `mapstructure:"ima_push_folder_id"`
+	IMAPushConcurrency      int    `mapstructure:"ima_push_concurrency"`
 	// Pipeline worker（PR1）。控制 chatlog server 模式下后台是否自动推进
 	// 文章的 fetch → mdexport → summarize → imapush 流水线。
-	BizWorkerEnabled        bool     `mapstructure:"biz_worker_enabled"`
-	BizWorkerInterval       int      `mapstructure:"biz_worker_interval"`        // 秒
-	BizWorkerBatchSize      int      `mapstructure:"biz_worker_batch_size"`
-	Webhook                 *Webhook `mapstructure:"webhook"`
+	BizWorkerEnabled   bool     `mapstructure:"biz_worker_enabled"`
+	BizWorkerInterval  int      `mapstructure:"biz_worker_interval"` // 秒
+	BizWorkerBatchSize int      `mapstructure:"biz_worker_batch_size"`
+	Webhook            *Webhook `mapstructure:"webhook"`
 }
 
 var ServerDefaults = map[string]any{}

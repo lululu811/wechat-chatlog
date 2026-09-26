@@ -232,6 +232,11 @@ type Exporter struct {
 	warnOnce sync.Once
 }
 
+// OutputDir 返回输出根目录
+func (e *Exporter) OutputDir() string {
+	return e.cfg.OutputDir
+}
+
 // needsExclusiveRun 报告本次导出是否必须独占执行。
 func (e *Exporter) needsExclusiveRun() bool {
 	e.capsMu.Lock()

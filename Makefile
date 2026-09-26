@@ -3,7 +3,7 @@ GO := go
 ifeq ($(VERSION),)
 	VERSION := $(shell git describe --tags --always --dirty="-dev")
 endif
-LDFLAGS := -ldflags '-X "github.com/sjzar/chatlog/pkg/version.Version=$(VERSION)" -w -s'
+LDFLAGS := -ldflags '-X "github.com/chenliitaz/chatlog/pkg/version.Version=$(VERSION)" -w -s'
 
 PLATFORMS := \
 	darwin/amd64 \
@@ -19,13 +19,19 @@ UPX_PLATFORMS := \
 	linux/arm64 \
 	windows/amd64
 
-.PHONY: all clean lint tidy test build crossbuild upx
+.PHONY: all clean lint tidy test build crossbuild upx build-frontend
 
 all: clean lint tidy test build
 
 clean:
 	@echo "🧹 Cleaning..."
 	@rm -rf bin/
+
+build-frontend:
+	@if command -v npm >/dev/null 2>&1 && [ -d "frontend" ]; then \
+		echo "📦 Building frontend with Vite..."; \
+		(cd frontend && npm run build); \
+	fi
 
 lint:
 	@echo "🕵️‍♂️ Running linters..."
@@ -39,11 +45,11 @@ test:
 	@echo "🧪 Running Go tests..."
 	$(GO) test ./... -cover
 
-build:
+build: build-frontend
 	@echo "🔨 Building for current platform..."
 	CGO_ENABLED=1 $(GO) build -trimpath $(LDFLAGS) -o bin/$(BINARY_NAME) main.go
 
-crossbuild: clean
+crossbuild: clean build-frontend
 	@echo "🌍 Building for multiple platforms..."
 	for platform in $(PLATFORMS); do \
 		os=$$(echo $$platform | cut -d/ -f1); \

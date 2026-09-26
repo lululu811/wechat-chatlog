@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chenliitaz/chatlog/internal/chatlog/conf"
+	"github.com/chenliitaz/chatlog/internal/wechat"
+	"github.com/chenliitaz/chatlog/pkg/config"
+	"github.com/chenliitaz/chatlog/pkg/util"
 	"github.com/rs/zerolog/log"
-	"github.com/sjzar/chatlog/internal/chatlog/conf"
-	"github.com/sjzar/chatlog/internal/wechat"
-	"github.com/sjzar/chatlog/pkg/config"
-	"github.com/sjzar/chatlog/pkg/util"
 )
 
 const (

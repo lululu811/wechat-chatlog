@@ -7,6 +7,9 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +54,7 @@ func RegisterStatic(r gin.IRoutes, urlPrefix string) {
 			c.String(http.StatusNotFound, "Not found")
 			return
 		}
+		c.Header("Cache-Control", "no-cache, must-revalidate")
 		c.Data(http.StatusOK, staticContentType(name), data)
 	})
 }
@@ -61,6 +65,16 @@ func staticContentType(name string) string {
 		return "text/css; charset=utf-8"
 	case strings.HasSuffix(name, ".js"):
 		return "application/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".svg"):
+		return "image/svg+xml"
+	case strings.HasSuffix(name, ".woff2"):
+		return "font/woff2"
+	case strings.HasSuffix(name, ".woff"):
+		return "font/woff"
+	case strings.HasSuffix(name, ".json"):
+		return "application/json"
+	case strings.HasSuffix(name, ".png"):
+		return "image/png"
 	default:
 		return "application/octet-stream"
 	}
@@ -98,6 +112,7 @@ func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) 
 		route(api, http.MethodGet, "/accounts", "", withRecovery(handleGetAccounts, getSvc))
 		route(api, http.MethodGet, "/articles", "", withRecovery(handleGetArticles, getSvc))
 		route(api, http.MethodGet, "/articles/:id", "", withRecovery(handleGetArticle, getSvc))
+		route(api, http.MethodGet, "/articles/:id/media/*filepath", "", withRecovery(handleGetArticleMedia, getSvc))
 		route(api, http.MethodGet, "/search", "", withRecovery(handleSearch, getSvc))
 		route(api, http.MethodGet, "/bookmarks", "", withRecovery(handleGetBookmarks, getSvc))
 		route(api, http.MethodPost, "/sync", "", withRecovery(handleSync, getSvc))
@@ -216,7 +231,10 @@ func RegisterRoutes(r *gin.RouterGroup, getSvc func() *Service, llm *LLMClient) 
 	}
 
 	r.GET("/biz", withRecoveryPage(handleBizPage, getSvc))
+	r.GET("/biz/digest", withRecoveryPage(handleBizPage, getSvc))
+	r.GET("/biz/article/:id", withRecoveryPage(handleBizPage, getSvc))
 	r.GET("/biz/reports", withRecoveryPage(handleReportsPage, getSvc))
+	r.GET("/biz/reports/:id", withRecoveryPage(handleReportsPage, getSvc))
 	r.GET("/biz/admin", withRecoveryPage(handleAdminPage, getSvc))
 	r.GET("/biz/sectors", withRecoveryPage(handleSectorsPage, getSvc))
 
@@ -336,23 +354,64 @@ func withRecoveryPage(handler func(c *gin.Context, svc *Service), getSvc func() 
 	}
 }
 
-// handleGetAccounts 获取公众号列表
+// handleGetAccounts 获取公众号列表（含关联标签）
 func handleGetAccounts(c *gin.Context, svc *Service) {
-	accounts := svc.GetAccounts()
-	if accounts == nil {
+	includeHidden, _ := strconv.ParseBool(c.DefaultQuery("include_hidden", "true"))
+	var accounts []Account
+	var err error
+	if includeHidden {
+		accounts, err = svc.GetAllAccounts()
+	} else {
+		accounts = svc.GetAccounts()
+	}
+	if err != nil || accounts == nil {
 		accounts = []Account{}
 	}
-	c.JSON(http.StatusOK, listResponse(accounts, len(accounts), 0, 0))
+
+	tagsMap, err := svc.Store().GetAllAccountTagsMap()
+	if err != nil {
+		tagsMap = make(map[string][]Tag)
+	}
+
+	tagIDStr := c.Query("tag_id")
+	var filterTagID int64
+	if tagIDStr != "" {
+		filterTagID, _ = strconv.ParseInt(tagIDStr, 10, 64)
+	}
+
+	result := make([]AccountWithTag, 0, len(accounts))
+	for _, acc := range accounts {
+		tags := tagsMap[acc.GHID]
+		if tags == nil {
+			tags = []Tag{}
+		}
+		if filterTagID > 0 {
+			hasTag := false
+			for _, t := range tags {
+				if t.ID == filterTagID {
+					hasTag = true
+					break
+				}
+			}
+			if !hasTag {
+				continue
+			}
+		}
+		result = append(result, AccountWithTag{Account: acc, Tags: tags})
+	}
+	c.JSON(http.StatusOK, listResponse(result, len(result), 0, 0))
 }
 
 // handleGetArticles 获取文章列表（懒加载）。
 //
-// 两个查询参数都可选，对应「全部」模式当资料库用的场景：
+// 查询参数都可选，对应「全部」模式当资料库用的场景：
 //
-//	ghid  不传 = 全部公众号（含未关注、含已隐藏）
-//	days  不传或 <=0 = 不限时间窗
+//	ghid    不传 = 全部公众号（含未关注、含已隐藏）
+//	tag_id  不传或 <=0 = 全部标签分类
+//	days    不传或 <=0 = 不限时间窗
 func handleGetArticles(c *gin.Context, svc *Service) {
 	ghid := c.Query("ghid")
+	tagID, _ := strconv.ParseInt(c.Query("tag_id"), 10, 64)
 	days, _ := strconv.Atoi(c.DefaultQuery("days", "0"))
 	if days < 0 {
 		days = 0
@@ -365,7 +424,7 @@ func handleGetArticles(c *gin.Context, svc *Service) {
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	unreadOnly, _ := strconv.ParseBool(c.DefaultQuery("unread_only", "false"))
 
-	filter := ArticleFilter{GHID: ghid, Days: days, Limit: limit, Offset: offset, UnreadOnly: unreadOnly}
+	filter := ArticleFilter{GHID: ghid, TagID: tagID, Days: days, Limit: limit, Offset: offset, UnreadOnly: unreadOnly}
 	articles, err := svc.ListArticlesWithFilter(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -374,10 +433,11 @@ func handleGetArticles(c *gin.Context, svc *Service) {
 	if articles == nil {
 		articles = []Article{}
 	}
-	// ghid / days 仍在返回里回显：前端切模式时靠它确认后端真实生效的范围，
+	// ghid / days / tagId 仍在返回里回显：前端切模式时靠它确认后端真实生效的范围，
 	// 而不是只看自己发出去的参数。
 	resp := listResponse(articles, svc.CountListArticlesWithFilter(filter), limit, offset)
 	resp["ghid"] = ghid
+	resp["tagId"] = tagID
 	resp["days"] = days
 	resp["unreadOnly"] = unreadOnly
 	c.JSON(http.StatusOK, resp)
@@ -401,7 +461,239 @@ func handleGetArticle(c *gin.Context, svc *Service) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "article not found"})
 		return
 	}
+
+	// 动态装载归档的 MD 正文与 AI 摘要
+	if exp, err := svc.Store().GetExportRecord(id); err == nil && exp != nil {
+		if exp.SummaryPath != "" {
+			if data, err := os.ReadFile(exp.SummaryPath); err == nil {
+				parsed := parseSummaryFile(string(data))
+				article.Digest = parsed.Summary
+				article.Highlights = parsed.Highlights
+				article.Themes = parsed.Themes
+				article.Keywords = parsed.Keywords
+				article.MustRead = parsed.MustRead
+			}
+		}
+		if exp.MDPath != "" {
+			if data, err := os.ReadFile(exp.MDPath); err == nil {
+				article.Content = string(data)
+			}
+		}
+	}
+
+	// 若尚未导出本地 MD，尝试从已抓取内容表兜底
+	if article.Content == "" && article.URL != "" {
+		if _, content, _, _, _, exists, err := svc.Store().GetContent(HashURL(article.URL)); err == nil && exists && content != "" {
+			article.Content = content
+		}
+	}
+
 	c.JSON(http.StatusOK, article)
+}
+
+// handleGetArticleMedia 静态提供文章关联的本地图片资源（如 images/img_001.jpeg）
+func handleGetArticleMedia(c *gin.Context, svc *Service) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.String(http.StatusBadRequest, "invalid article id")
+		return
+	}
+
+	exp, err := svc.Store().GetExportRecord(id)
+	if err != nil || exp == nil || exp.MDPath == "" {
+		c.String(http.StatusNotFound, "export record not found")
+		return
+	}
+
+	dir := filepath.Dir(exp.MDPath)
+	relPath := strings.TrimPrefix(c.Param("filepath"), "/")
+	if relPath == "" || strings.Contains(relPath, "..") {
+		c.String(http.StatusBadRequest, "invalid file path")
+		return
+	}
+
+	target := filepath.Join(dir, relPath)
+	if _, err := os.Stat(target); err != nil {
+		c.String(http.StatusNotFound, "media not found")
+		return
+	}
+
+	// 允许访问常见图片和资源扩展名，防止任意文件读取
+	ext := strings.ToLower(filepath.Ext(target))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".other":
+		c.Header("Cache-Control", "public, max-age=86400")
+		c.File(target)
+	default:
+		c.String(http.StatusForbidden, "unsupported media type")
+	}
+}
+
+type ParsedArticleSummary struct {
+	Summary    string   `json:"summary"`
+	Highlights []string `json:"highlights,omitempty"`
+	Themes     []string `json:"themes,omitempty"`
+	Keywords   []string `json:"keywords,omitempty"`
+	MustRead   int      `json:"mustRead,omitempty"`
+}
+
+func parseSummaryFile(raw string) ParsedArticleSummary {
+	var res ParsedArticleSummary
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return res
+	}
+
+	// 1. 如果包含 Markdown 代码块 ```json ... ```，先尝试从 JSON 块解析
+	bodyJSON := extractJSONFromText(raw)
+	if bodyJSON != "" {
+		var s struct {
+			Summary    string      `json:"summary"`
+			Highlights []string    `json:"highlights"`
+			Themes     []string    `json:"themes"`
+			Keywords   []string    `json:"keywords"`
+			MustRead   interface{} `json:"mustRead"`
+		}
+		if err := json.Unmarshal([]byte(bodyJSON), &s); err == nil {
+			res.Summary = cleanSummaryText(s.Summary)
+			res.Highlights = s.Highlights
+			res.Themes = s.Themes
+			res.Keywords = s.Keywords
+			switch v := s.MustRead.(type) {
+			case float64:
+				res.MustRead = int(v)
+			case int:
+				res.MustRead = v
+			}
+		} else {
+			// 容错解析：处理 LLM 在 JSON 字符串中未对双引号转义的情况（如 "星际之门"）
+			res = parseLooseSummaryJSON(bodyJSON)
+		}
+	}
+
+	// 2. 如果 Summary 依然为空，尝试从 YAML frontmatter 提取
+	if res.Summary == "" && strings.HasPrefix(raw, "---") {
+		res = parseYAMLFrontmatter(raw, res)
+	}
+
+	res.Summary = cleanSummaryText(res.Summary)
+	return res
+}
+
+func extractJSONFromText(text string) string {
+	parts := strings.SplitN(text, "---", 3)
+	var body string
+	if len(parts) >= 3 {
+		body = parts[2]
+	} else {
+		body = text
+	}
+	matches := regexp.MustCompile("(?s)```json\\s*(.*?)```").FindAllStringSubmatch(body, -1)
+	if len(matches) > 0 {
+		return strings.TrimSpace(matches[0][1])
+	}
+	// 尝试寻找 {...}
+	if start := strings.Index(body, "{\n  \"summary\""); start != -1 {
+		if end := strings.LastIndex(body, "}"); end > start {
+			return strings.TrimSpace(body[start : end+1])
+		}
+	}
+	// 兜底在整篇文本中寻找
+	matchesAll := regexp.MustCompile("(?s)```json\\s*(.*?)```").FindAllStringSubmatch(text, -1)
+	if len(matchesAll) > 0 {
+		return strings.TrimSpace(matchesAll[len(matchesAll)-1][1])
+	}
+	return ""
+}
+
+func parseLooseSummaryJSON(jsonStr string) ParsedArticleSummary {
+	var res ParsedArticleSummary
+	// 提取 summary: 匹配从 "summary": " 到下一个字段键 ", "\w+":
+	sm := regexp.MustCompile(`(?s)"summary"\s*:\s*"(.*?)"\s*,\s*"\w+"`).FindStringSubmatch(jsonStr)
+	if len(sm) > 1 {
+		res.Summary = sm[1]
+	}
+
+	// 提取 highlights
+	hm := regexp.MustCompile(`(?s)"highlights"\s*:\s*\[(.*?)\]`).FindStringSubmatch(jsonStr)
+	if len(hm) > 1 {
+		res.Highlights = extractQuotedArray(hm[1])
+	}
+
+	// 提取 themes
+	tm := regexp.MustCompile(`(?s)"themes"\s*:\s*\[(.*?)\]`).FindStringSubmatch(jsonStr)
+	if len(tm) > 1 {
+		res.Themes = extractQuotedArray(tm[1])
+	}
+
+	// 提取 keywords
+	km := regexp.MustCompile(`(?s)"keywords"\s*:\s*\[(.*?)\]`).FindStringSubmatch(jsonStr)
+	if len(km) > 1 {
+		res.Keywords = extractQuotedArray(km[1])
+	}
+
+	// 提取 mustRead
+	rm := regexp.MustCompile(`"mustRead"\s*:\s*(\d+)`).FindStringSubmatch(jsonStr)
+	if len(rm) > 1 {
+		res.MustRead, _ = strconv.Atoi(rm[1])
+	}
+
+	return res
+}
+
+func extractQuotedArray(bracketContent string) []string {
+	var items []string
+	lines := strings.Split(bracketContent, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		line = strings.TrimSuffix(line, ",")
+		if strings.HasPrefix(line, `"`) && strings.HasSuffix(line, `"`) && len(line) >= 2 {
+			items = append(items, line[1:len(line)-1])
+		}
+	}
+	return items
+}
+
+func parseYAMLFrontmatter(raw string, current ParsedArticleSummary) ParsedArticleSummary {
+	lines := strings.Split(raw, "\n")
+	inFrontmatter := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			if !inFrontmatter {
+				inFrontmatter = true
+				continue
+			} else {
+				break
+			}
+		}
+		if inFrontmatter && strings.HasPrefix(trimmed, "summary:") {
+			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "summary:"))
+			val = strings.Trim(val, `"'`)
+			if val != "|-" && val != "" && !strings.HasPrefix(val, "```") {
+				current.Summary = val
+			}
+		}
+	}
+	return current
+}
+
+func cleanSummaryText(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "|-" || s == "|" || s == "-" {
+		return ""
+	}
+	if strings.HasPrefix(s, "|-") {
+		s = strings.TrimSpace(strings.TrimPrefix(s, "|-"))
+	}
+	if strings.HasPrefix(s, "```json") {
+		if m := regexp.MustCompile(`"summary"\s*:\s*"([^"]+)`).FindStringSubmatch(s); len(m) > 1 {
+			return m[1]
+		}
+		return ""
+	}
+	return s
 }
 
 // handleSearch 搜索文章（懒加载）
@@ -1148,9 +1440,9 @@ func handleExportArticle(c *gin.Context, svc *Service) {
 // handlePushArticle 单篇推送。
 //
 // 链式校验：
-//   1. 必须先配置 IMA（skill_dir + kb_id）
-//   2. 文章必须已经 MD 归档成功（status IN 'exported','summary_generated'）
-//   否则返回 400 / 409。
+//  1. 必须先配置 IMA（skill_dir + kb_id）
+//  2. 文章必须已经 MD 归档成功（status IN 'exported','summary_generated'）
+//     否则返回 400 / 409。
 //
 // 400 / 409 都有明确的文案说明如何修复 —— 用户点了一个被禁用的按钮时，
 // 错误文案是仅有的反馈渠道。
@@ -1218,7 +1510,12 @@ func handleStartExportJob(c *gin.Context, svc *Service) {
 
 	// 202 而不是 200：任务已接受但**还没跑完**。用 200 会让调用方误以为
 	// 返回体里的数字是最终结果。
-	c.JSON(http.StatusAccepted, gin.H{"job": job})
+	c.JSON(http.StatusAccepted, gin.H{
+		"job":         job,
+		"job_id":      job.ID,
+		"id":          job.ID,
+		"activeJobID": svc.ActiveExportJob(),
+	})
 }
 
 func handleGetExportJob(c *gin.Context, svc *Service) {
@@ -1279,7 +1576,14 @@ func handleListExportJobs(c *gin.Context, svc *Service) {
 }
 
 func handleRetryExportJob(c *gin.Context, svc *Service) {
-	job, err := svc.RetryExportJob(c.Param("id"))
+	id := c.Param("id")
+	if id == "" || id == "latest" || id == "active" {
+		jobs, err := svc.ListExportJobs(1)
+		if err == nil && len(jobs) > 0 {
+			id = jobs[0].ID
+		}
+	}
+	job, err := svc.RetryExportJob(id)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrExportNotConfigured):
@@ -1293,7 +1597,7 @@ func handleRetryExportJob(c *gin.Context, svc *Service) {
 		}
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"job": job})
+	c.JSON(http.StatusAccepted, gin.H{"job": job, "job_id": job.ID, "id": job.ID, "activeJobID": svc.ActiveExportJob()})
 }
 
 func handleCancelExportJob(c *gin.Context, svc *Service) {
@@ -1315,11 +1619,12 @@ func handleExportStatus(c *gin.Context, svc *Service) {
 
 	if !svc.IsExportConfigured() {
 		c.JSON(http.StatusOK, gin.H{
-			"configured": false,
-			"exported":   0,
-			"pending":    0,
-			"blocked":    0,
-			"days":       days,
+			"configured":  false,
+			"exported":    0,
+			"pending":     0,
+			"blocked":     0,
+			"days":        days,
+			"activeJobID": "",
 		})
 		return
 	}
@@ -1331,11 +1636,12 @@ func handleExportStatus(c *gin.Context, svc *Service) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"configured": true,
-		"exported":   stats.Exported,
-		"pending":    stats.Pending,
-		"blocked":    stats.Blocked,
-		"days":       stats.Days,
+		"configured":  true,
+		"exported":    stats.Exported,
+		"pending":     stats.Pending,
+		"blocked":     stats.Blocked,
+		"days":        stats.Days,
+		"activeJobID": svc.ActiveExportJob(),
 	})
 }
 
@@ -1545,15 +1851,16 @@ func handleGenerateBatchSummaries(c *gin.Context, svc *Service, llm *LLMClient) 
 // handlePipelineStatus 返回 pipeline 状态快照。
 //
 // 返回字段：
-//   enabled         — worker 是否启用（false 时 ticker 不会触发）
-//   counts          — map[status]count，例如 {"pending": 23000, "pushed": 100, "failed:fetch": 5}
-//   failed_by_stage — 4 个失败分类的拆分，运维一眼看出"哪个 stage 在掉"
-//                     例如 {"fetch": 2, "mdexport": 1, "summarize": 0, "imapush": 1}
-//   totals          — 4 个汇总：all/in_flight/completed/failed
-//                     in_flight = pending + fetched + md_exported + summarized
-//                     completed = pushed
-//                     failed    = failed:fetch + failed:mdexport + failed:summarize + failed:imapush
-//   recent          — 最近 20 条 failed 文章（任意 stage），含 pipeline_error 字段
+//
+//	enabled         — worker 是否启用（false 时 ticker 不会触发）
+//	counts          — map[status]count，例如 {"pending": 23000, "pushed": 100, "failed:fetch": 5}
+//	failed_by_stage — 4 个失败分类的拆分，运维一眼看出"哪个 stage 在掉"
+//	                  例如 {"fetch": 2, "mdexport": 1, "summarize": 0, "imapush": 1}
+//	totals          — 4 个汇总：all/in_flight/completed/failed
+//	                  in_flight = pending + fetched + md_exported + summarized
+//	                  completed = pushed
+//	                  failed    = failed:fetch + failed:mdexport + failed:summarize + failed:imapush
+//	recent          — 最近 20 条 failed 文章（任意 stage），含 pipeline_error 字段
 //
 // failed_by_stage 是 PR3 新增：原版只有 counts，运维要从 4 个 failed:* 状态手动相加；
 // 现在直接给 stage 维度。counts 仍然返回，UI 可以两者并存。

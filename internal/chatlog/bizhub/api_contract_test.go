@@ -11,7 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/sjzar/chatlog/internal/model"
+	"github.com/chenliitaz/chatlog/internal/model"
 )
 
 // 本文件锁定接口层对外契约（设计说明 §6「命名与接口规约」）：

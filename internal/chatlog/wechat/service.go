@@ -13,11 +13,11 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 
-	"github.com/sjzar/chatlog/internal/errors"
-	"github.com/sjzar/chatlog/internal/wechat"
-	"github.com/sjzar/chatlog/internal/wechat/decrypt"
-	"github.com/sjzar/chatlog/pkg/filemonitor"
-	"github.com/sjzar/chatlog/pkg/util"
+	"github.com/chenliitaz/chatlog/internal/errors"
+	"github.com/chenliitaz/chatlog/internal/wechat"
+	"github.com/chenliitaz/chatlog/internal/wechat/decrypt"
+	"github.com/chenliitaz/chatlog/pkg/filemonitor"
+	"github.com/chenliitaz/chatlog/pkg/util"
 )
 
 var (

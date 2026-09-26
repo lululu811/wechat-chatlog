@@ -3,9 +3,9 @@ package form
 import (
 	"fmt"
 
+	"github.com/chenliitaz/chatlog/internal/ui/style"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"github.com/sjzar/chatlog/internal/ui/style"
 )
 
 const (

@@ -1,9 +1,14 @@
 #!/bin/bash
 # chatlog 密钥提取 — 前置环境检查
-# 重启回 macOS 后第一条命令
-# 临时辅助脚本,用完可删
+# 检查 SIP / 二进制 / 微信进程 / 沙盒读权限 / FDA 授权是否就位
+# 用法: ./script/precheck.sh   （可用 CHATLOG_BIN 指定二进制路径）
 
 set -e
+
+# 二进制默认取仓库内 bin/chatlog，可用 CHATLOG_BIN 覆盖（已装到 PATH 也行）
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="${CHATLOG_BIN:-$REPO_ROOT/bin/chatlog}"
+
 
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'

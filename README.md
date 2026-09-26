@@ -6,13 +6,22 @@ _聊天记录工具，帮助大家轻松使用自己的聊天数据_
 
 [![ImgMCP](https://cdn.imgmcp.com/imgmcp-logo-small.png)](https://imgmcp.com)
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/sjzar/chatlog)](https://goreportcard.com/report/github.com/sjzar/chatlog)
-[![GoDoc](https://godoc.org/github.com/sjzar/chatlog?status.svg)](https://godoc.org/github.com/sjzar/chatlog)
-[![GitHub release](https://img.shields.io/github/release/sjzar/chatlog.svg)](https://github.com/sjzar/chatlog/releases)
-[![GitHub license](https://img.shields.io/github/license/sjzar/chatlog.svg)](https://github.com/sjzar/chatlog/blob/main/LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/chenliitaz/chatlog)](https://goreportcard.com/report/github.com/chenliitaz/chatlog)
+[![GoDoc](https://godoc.org/github.com/chenliitaz/chatlog?status.svg)](https://godoc.org/github.com/chenliitaz/chatlog)
+[![GitHub release](https://img.shields.io/github/release/chenliitaz/chatlog.svg)](https://github.com/chenliitaz/chatlog/releases)
+[![GitHub license](https://img.shields.io/github/license/chenliitaz/chatlog.svg)](https://github.com/chenliitaz/chatlog/blob/main/LICENSE)
 
 
 </div>
+
+> [!NOTE]
+> **本仓库是 [sjzar/chatlog](https://github.com/sjzar/chatlog) 的 fork。**
+> 上游项目由 Sarv 及社区贡献者创建，本仓库在其基础上增加了公众号汇总（bizhub）、
+> 独立 Vue 前端、`chatstat` 统计命令与访问鉴权，并修复了若干并发与安全问题。
+> 遵循 Apache-2.0 §4(d)，上游版权声明完整保留在 `LICENSE`，修改说明见 [`NOTICE`](./NOTICE)。
+> **本 README 中的安装、镜像、Issue、Discussion 均指向本 fork**；仅少数上游独有的内容
+> （如 FAQ issue）保留上游链接。
+
 
 ## Feature
 
@@ -47,21 +56,21 @@ _聊天记录工具，帮助大家轻松使用自己的聊天数据_
 - **macOS 用户**：获取密钥前需[临时关闭 SIP](#macos-版本说明)
 - **Windows 用户**：遇到界面显示问题请[使用 Windows Terminal](#windows-版本说明)
 - **集成 AI 助手**：查看 [MCP 集成指南](#mcp-集成)
-- **无法获取密钥**：查看 [FAQ](https://github.com/sjzar/chatlog/issues/197)
+- **无法获取密钥**：查看 [FAQ](https://github.com/sjzar/chatlog/issues/197)（上游 issue，本仓库未收录该问答）
 
 ## 安装指南
 
 ### 从源码安装
 
 ```bash
-go install github.com/sjzar/chatlog@latest
+go install github.com/chenliitaz/chatlog@latest
 ```
 
 > 💡 **提示**: 部分功能有 cgo 依赖，编译前需确认本地有 C 编译环境。
 
 ### 下载预编译版本
 
-访问 [Releases](https://github.com/sjzar/chatlog/releases) 页面下载适合您系统的预编译版本。
+访问 [Releases](https://github.com/chenliitaz/chatlog/releases) 页面下载适合您系统的预编译版本。
 
 ## 使用指南
 
@@ -117,21 +126,16 @@ Image Key: [38636***653361]
 
 **1. 拉取镜像**
 
-chatlog 提供了两个镜像源：
+镜像发布在 GitHub Container Registry (ghcr)：
 
-**Docker Hub**:
 ```shell
-docker pull sjzar/chatlog:latest
+docker pull ghcr.io/chenliitaz/chatlog:latest
 ```
 
-**GitHub Container Registry (ghcr)**:
-```shell
-docker pull ghcr.io/sjzar/chatlog:latest
-```
+> 💡 **镜像地址**: https://ghcr.io/chenliitaz/chatlog
 
-> 💡 **镜像地址**: 
-> - Docker Hub: https://hub.docker.com/r/sjzar/chatlog
-> - GitHub Container Registry: https://ghcr.io/sjzar/chatlog
+> ℹ️ 镜像的 tag 规则：正式版为 `vX.Y.Z` / `latest`，预览版为 `vX.Y.Z-rcN`（不含 `latest`）。
+
 
 **2. 运行容器**
 
@@ -140,7 +144,7 @@ $ docker run -d \
   --name chatlog \
   -p 5030:5030 \
   -v /path/to/your/wechat/data:/app/data \
-  sjzar/chatlog:latest
+  ghcr.io/chenliitaz/chatlog:latest
 ```
 
 **3. 启用公众号汇总 / LLM 摘要（可选）**
@@ -253,11 +257,11 @@ GET /api/v1/chatlog/stat?days=7&top=20
   "groupCount": 25,
   "talkers": [
     {
-      "rank": 1, "id": "wxid_xxx", "name": "Jett·夜宁",
+      "rank": 1, "id": "wxid_xxx", "name": "示例联系人",
       "isChatRoom": false, "count": 200, "sent": 113, "received": 87,
       "firstAt": 1757833443, "lastAt": 1758175443,
       "topKeywords": ["晚安", "今天", "没有"],
-      "sampleTexts": ["不理我", "我去，我直接睡着了"]
+      "sampleTexts": ["示例消息一", "示例消息二"]
     }
   ]
 }
@@ -471,7 +475,7 @@ Chatlog 可以与多种支持 MCP 的 AI 助手集成，包括：
 
 查看 [Prompt 指南](docs/prompt.md) 获取详细示例。
 
-同时欢迎大家分享使用经验和 prompt！如果您有好的 prompt 示例或使用技巧，请通过 [Discussions](https://github.com/sjzar/chatlog/discussions) 进行分享，共同进步。
+同时欢迎大家分享使用经验和 prompt！如果您有好的 prompt 示例或使用技巧，请通过 [Discussions](https://github.com/chenliitaz/chatlog/discussions) 进行分享，共同进步。
 
 ## 免责声明
 
@@ -492,14 +496,26 @@ Chatlog 可以与多种支持 MCP 的 AI 助手集成，包括：
 
 本项目基于 [Apache-2.0 许可证](./LICENSE) 开源。
 
+本仓库 fork 自 [sjzar/chatlog](https://github.com/sjzar/chatlog)，上游版权归原作者所有，
+版权声明与本 fork 的修改清单见 [`NOTICE`](./NOTICE)。
+
+
 ## 隐私政策
 
 本项目不收集任何用户数据。所有数据处理均在用户本地设备上进行。使用第三方服务时，请参阅相应服务的隐私政策。
 
 ## Thanks
 
+- [sjzar/chatlog](https://github.com/sjzar/chatlog) —— 本项目的上游，作者 Sarv 及全体贡献者
 - [@0xlane](https://github.com/0xlane) 的 [wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs) 项目
 - [@xaoyaoo](https://github.com/xaoyaoo) 的 [PyWxDump](https://github.com/xaoyaoo/PyWxDump) 项目
 - [@git-jiadong](https://github.com/git-jiadong) 的 [go-lame](https://github.com/git-jiadong/go-lame) 和 [go-silk](https://github.com/git-jiadong/go-silk) 项目
 - [Anthropic](https://www.anthropic.com/) 的 [MCP]((https://github.com/modelcontextprotocol) ) 协议
 - 各个 Go 开源库的贡献者们
+
+## 贡献
+
+欢迎提 Issue 与 PR。本 fork 相对上游的差异见 [`NOTICE`](./NOTICE) 的 "Modifications" 一节，
+改动前请先确认上游是否已修复同类问题，避免重复劳动。
+
+开发前置：`go mod download` → `make build` → `make test`（CGO 必须开启）。详见 [AGENTS.md](./AGENTS.md)。

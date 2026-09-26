@@ -8,7 +8,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/sjzar/chatlog/internal/wechatdb"
+	"github.com/chenliitaz/chatlog/internal/wechatdb"
 )
 
 // Syncer 负责从 wechatdb 同步数据到本地 store

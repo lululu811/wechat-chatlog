@@ -26,8 +26,8 @@
         }
 
         .btn {
-            padding: 7px 18px;
-            border-radius: 6px;
+            padding: 7px 16px;
+            border-radius: 8px;
             font-size: 13px;
             font-family: var(--font-sans);
             font-weight: 500;
@@ -35,36 +35,49 @@
             border: 1px solid var(--border);
             background: var(--surface);
             color: var(--text-secondary);
-            transition: all 0.2s;
+            transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
             letter-spacing: 0.01em;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 6px;
+            box-shadow: var(--shadow-xs);
+            user-select: none;
         }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
         .btn-accent {
-            background: var(--accent);
-            color: #fff;
+            background: linear-gradient(180deg, var(--accent-soft) 0%, var(--accent) 100%);
+            color: #fff !important;
             border-color: var(--accent);
+            box-shadow: 0 1px 3px rgba(5, 150, 105, 0.25);
         }
-        .btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+        .btn-accent:hover {
+            background: linear-gradient(180deg, var(--accent) 0%, var(--accent-hover) 100%);
+            border-color: var(--accent-hover);
+            box-shadow: 0 2px 6px rgba(5, 150, 105, 0.35);
+        }
         .btn-ghost {
             background: transparent;
             border-color: transparent;
+            box-shadow: none;
         }
-        .btn-ghost:hover { background: var(--accent-bg); color: var(--text); border-color: var(--border); }
-        .btn-sm { padding: 5px 14px; font-size: 12px; }
+        .btn-ghost:hover {
+            background: var(--hover);
+            color: var(--accent);
+            border-color: var(--border-light);
+        }
+        .btn-sm { padding: 5px 12px; font-size: 12px; border-radius: 6px; }
 
         .search-box {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             border: 1px solid var(--border);
-            border-radius: 6px;
+            border-radius: 8px;
             padding: 6px 12px;
             width: 260px;
-            background: var(--bg);
-            transition: border-color 0.2s;
+            background: var(--surface);
+            transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: var(--shadow-xs);
         }
 
         /* ── Layout：动态模式无侧栏（全宽阅读），全部模式 240px 侧栏 + 列表 ── */
@@ -544,13 +557,18 @@
         .article-card {
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 8px;
+            border-radius: 12px;
             padding: 20px 24px;
             box-shadow: var(--shadow);
-            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             animation: fadeUp 0.18s ease both;
             position: relative;
             cursor: pointer;
+        }
+        .article-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lift);
+            border-color: var(--border-strong);
         }
         .article-card.bookmarked {
             border-color: var(--accent);
@@ -884,6 +902,7 @@
     </style>
 </head>
 <body>
+    <div id="app"></div>
     <div class="header">
         <div class="header-left">
             <h1>动态</h1>
@@ -2059,24 +2078,11 @@
             content.innerHTML = html;
         }
 
-        /* ── 同步 ── */
-        async function pollSyncStatus() {
-            const btn = document.getElementById('syncBtn');
-            const check = async () => {
-                try {
-                    const resp = await apiFetch('/api/v1/biz/status');
-                    const data = await resp.json();
-                    if (data.syncing) { setSyncing(btn, data); setTimeout(check, 2000); }
-                    else {
-                        btn.disabled = false;
-                        btn.textContent = '同步';
-                        await loadStream(0, true);
-                        if (mode === 'digest') loadDigest();
-                    }
-                } catch (err) { btn.disabled = false; btn.textContent = '同步'; }
-            };
-            check();
-        }
+        /* ── 同步完成回调 ── */
+        window.onSyncFinished = async function() {
+            await loadStream(0, true);
+            if (mode === 'digest') loadDigest();
+        };
 
         /* ── Init ── */
         (async function() {

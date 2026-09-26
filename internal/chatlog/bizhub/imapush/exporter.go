@@ -166,11 +166,11 @@ func KindOf(err error) FailureKind {
 // classifyProcessErr 依据进程退出码与 stderr 判定失败分类（处理 imaskai 的两层错误协议）。
 //
 // imaskai 的两层协议：
-//   1. 进程退出码 != 0 时，stderr 是结构化 JSON {"code": -100|-200, "msg": "..."}
-//      -100 = 程序错误（凭证缺、网络错、参数错）
-//      -200 = skill 需升级（原请求未发出）
-//   2. 进程正常退出时，stdout 是业务响应 {"code": 0, "data": {...}}
-//      code != 0 表示 IMA 业务错误，按 msg 内容细分。
+//  1. 进程退出码 != 0 时，stderr 是结构化 JSON {"code": -100|-200, "msg": "..."}
+//     -100 = 程序错误（凭证缺、网络错、参数错）
+//     -200 = skill 需升级（原请求未发出）
+//  2. 进程正常退出时，stdout 是业务响应 {"code": 0, "data": {...}}
+//     code != 0 表示 IMA 业务错误，按 msg 内容细分。
 //
 // 这个函数只处理第 1 层（进程层）。第 2 层（业务层）由 classifyBusiness 处理。
 func classifyProcessErr(exitCode int, stderr string, timedOut bool) FailureKind {

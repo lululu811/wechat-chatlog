@@ -1,6 +1,7 @@
 FROM debian:12-slim
 
-LABEL maintainer="Sarv <https://github.com/sjzar>"
+LABEL maintainer="chenliitaz <https://github.com/chenliitaz>"
+LABEL org.opencontainers.image.source="https://github.com/chenliitaz/chatlog"
 
 ARG DEBIAN_FRONTEND=noninteractive
 

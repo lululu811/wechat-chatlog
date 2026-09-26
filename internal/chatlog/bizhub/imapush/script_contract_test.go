@@ -35,12 +35,13 @@ func nodeAvailable() bool {
 // 调用形态：node ima_api.cjs <apiPath> <bodyJSON> <optsJSON>
 //
 // 行为由 <skill_dir>/../mode 文件决定（与 export_runner_test.go 的 fakeExportScript 同思路）：
-//   all-ok         -> 全部成功
-//   all-rate       -> 整批频控
-//   all-cred       -> 凭证缺失（-100）
-//   all-skillup    -> skill 需升级（-200）
-//   all-dep        -> 依赖缺失（imaskai not found）
-//   (空)           -> 按 URL 末段：ok* 成功 / rate* 限流 / bad* URL 不合法 / err* 单条失败
+//
+//	all-ok         -> 全部成功
+//	all-rate       -> 整批频控
+//	all-cred       -> 凭证缺失（-100）
+//	all-skillup    -> skill 需升级（-200）
+//	all-dep        -> 依赖缺失（imaskai not found）
+//	(空)           -> 按 URL 末段：ok* 成功 / rate* 限流 / bad* URL 不合法 / err* 单条失败
 const fakeIMAScript = `#!/usr/bin/env node
 'use strict';
 

@@ -36,16 +36,16 @@
 
         /* ── Layout ── */
         .layout {
-            max-width: 1080px;
+            max-width: 1240px;
             margin: 0 auto;
-            padding: 32px 40px 64px;
+            padding: 28px 40px 80px;
         }
 
         /* ── Toolbar ── */
         .toolbar {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 12px;
             margin-bottom: 20px;
             flex-wrap: wrap;
         }
@@ -53,116 +53,277 @@
             display: flex;
             align-items: center;
             border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 6px 12px;
-            width: 260px;
+            border-radius: 8px;
+            padding: 7px 12px;
+            width: 270px;
             background: var(--surface);
-            transition: border-color 0.2s;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: var(--shadow-xs);
         }
 
+        .seg-control {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface-subtle);
+            padding: 3px;
+            gap: 2px;
+            box-shadow: var(--shadow-xs);
+        }
         .seg-control button {
-            padding: 7px 16px;
+            padding: 6px 14px;
             border: none;
+            border-radius: 6px;
             background: transparent;
-            font-size: 13px;
+            font-size: 12.5px;
             font-family: var(--font-sans);
+            font-weight: 500;
             color: var(--text-secondary);
             cursor: pointer;
-            transition: all 0.15s;
-            border-right: 1px solid var(--border-light);
+            transition: all 0.15s ease;
+        }
+        .seg-control button:hover {
+            color: var(--text);
+        }
+        .seg-control button.active {
+            background: var(--surface);
+            color: var(--text);
+            font-weight: 600;
+            box-shadow: var(--shadow-xs);
         }
 
-        .tag-filter {
+        .tag-filter, .sort-select {
             padding: 7px 12px;
             border: 1px solid var(--border);
-            border-radius: 6px;
+            border-radius: 8px;
             background: var(--surface);
-            font-size: 13px;
+            font-size: 12.5px;
             font-family: var(--font-sans);
+            font-weight: 500;
             color: var(--text-secondary);
             cursor: pointer;
             outline: none;
-            transition: border-color 0.2s;
+            transition: all 0.18s ease;
+            box-shadow: var(--shadow-xs);
         }
-        .tag-filter:focus { border-color: var(--accent); }
+        .tag-filter:focus, .sort-select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-ring);
+        }
+        .sort-select {
+            margin-left: auto;
+        }
+
+        /* ── Pipeline Strip ── */
+        .pipeline-strip {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-top: 3px solid var(--accent);
+            border-radius: 12px;
+            padding: 15px 20px;
+            margin-bottom: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+            box-shadow: var(--shadow);
+        }
+        .pipeline-funnel {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .pipeline-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13.5px;
+            font-weight: 600;
+            color: var(--text);
+            margin-right: 6px;
+        }
+        .pipeline-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--accent);
+            display: inline-block;
+            box-shadow: 0 0 0 2px var(--accent-ring);
+        }
+        .pipeline-dot.pulse {
+            animation: pulse-dot 1.5s infinite;
+        }
+        @keyframes pulse-dot {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+        .pipeline-steps {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .pipeline-step {
+            display: flex;
+            flex-direction: column;
+            padding: 6px 14px;
+            background: var(--surface-subtle);
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
+            min-width: 82px;
+            transition: all 0.15s ease;
+        }
+        .pipeline-step:hover {
+            border-color: var(--border-strong);
+            background: var(--hover);
+            transform: translateY(-1px);
+        }
+        .pipeline-step .step-label {
+            color: var(--text-tertiary);
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.02em;
+            margin-bottom: 2px;
+        }
+        .pipeline-step .step-val {
+            font-weight: 700;
+            font-size: 15px;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+            line-height: 1.2;
+        }
+        .pipeline-sep {
+            color: var(--text-tertiary);
+            font-size: 13px;
+            user-select: none;
+        }
+        .pipeline-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
 
         /* ── Batch bar ── */
         .batch-bar {
             display: none;
             position: sticky;
-            top: 56px;
+            top: 64px;
             z-index: 90;
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 8px;
-            box-shadow: var(--shadow);
+            border-radius: 12px;
+            box-shadow: var(--shadow-md);
             padding: 10px 20px;
-            margin-bottom: 16px;
+            margin-bottom: 20px;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
+            backdrop-filter: blur(16px);
+            animation: fadeUp 0.2s ease both;
         }
         .batch-bar.show { display: flex; }
         .batch-count {
             font-size: 13px;
             color: var(--text-secondary);
             font-variant-numeric: tabular-nums;
-            margin-right: 8px;
+            margin-right: 6px;
         }
-        .batch-count strong { color: var(--accent); font-weight: 600; }
+        .batch-count strong { color: var(--accent); font-weight: 700; }
 
         /* ── Table card ── */
         .main-card {
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 8px;
+            border-radius: 12px;
             overflow: hidden;
+            box-shadow: var(--shadow);
         }
         .table-wrap { overflow-x: auto; }
         table {
             width: 100%;
             border-collapse: collapse;
-            min-width: 720px;
+            min-width: 740px;
         }
         thead th {
             text-align: left;
-            font-size: 12px;
-            font-weight: 500;
+            font-size: 11.5px;
+            font-weight: 600;
             color: var(--text-tertiary);
-            letter-spacing: 0.03em;
-            padding: 14px 16px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            padding: 13px 18px;
             border-bottom: 1px solid var(--border);
-            background: var(--bg);
+            background: var(--surface-subtle);
             white-space: nowrap;
         }
         tbody td {
-            padding: 14px 16px;
+            padding: 13px 18px;
             font-size: 13.5px;
             border-bottom: 1px solid var(--border-light);
             vertical-align: middle;
         }
         tbody tr:last-child td { border-bottom: none; }
-        tbody tr { transition: background 0.15s; }
+        tbody tr { transition: background 0.15s ease; cursor: pointer; }
         tbody tr:hover { background: var(--hover); }
-        tbody tr.row-hidden { opacity: 0.5; }
+        tbody tr.row-hidden { opacity: 0.55; }
 
-        .col-check { width: 36px; }
+        .col-check { width: 40px; }
         input[type="checkbox"].row-check,
         input[type="checkbox"].head-check {
-            width: 15px;
-            height: 15px;
+            width: 16px;
+            height: 16px;
             accent-color: var(--accent);
             cursor: pointer;
+            border-radius: 4px;
         }
 
+        .account-cell {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .account-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            background: var(--accent-bg);
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 13px;
+            flex-shrink: 0;
+            user-select: none;
+            border: 1px solid rgba(16, 185, 129, 0.15);
+        }
         .account-name {
             font-size: 13.5px;
             color: var(--text);
-            font-weight: 500;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
         }
+        .inspect-hint {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--accent);
+            background: var(--accent-bg);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            padding: 1px 7px;
+            border-radius: 4px;
+            margin-left: 8px;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+        tbody tr:hover .inspect-hint { opacity: 1; }
         .account-ghid {
             font-size: 11.5px;
             color: var(--text-tertiary);
             margin-top: 1px;
+            font-family: monospace;
         }
         .cell-tags {
             display: flex;
@@ -170,33 +331,36 @@
             flex-wrap: wrap;
         }
         .cell-tag {
-            font-size: 10.5px;
-            padding: 1px 8px;
+            font-size: 11px;
+            padding: 2px 8px;
             border-radius: 100px;
             color: #fff;
-            line-height: 1.5;
+            line-height: 1.4;
+            font-weight: 500;
             white-space: nowrap;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
         }
         .cell-count {
             font-variant-numeric: tabular-nums;
-            color: var(--text-secondary);
+            font-weight: 600;
+            color: var(--text);
         }
         .cell-time {
             font-variant-numeric: tabular-nums;
             color: var(--text-tertiary);
-            font-size: 12.5px;
+            font-size: 12px;
             white-space: nowrap;
         }
 
         /* Toggle switch */
         .toggle {
             position: relative;
-            width: 36px;
-            height: 20px;
-            background: var(--border);
+            width: 38px;
+            height: 22px;
+            background: var(--border-strong);
             border-radius: 100px;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             border: none;
             flex-shrink: 0;
         }
@@ -205,12 +369,12 @@
             position: absolute;
             top: 2px;
             left: 2px;
-            width: 16px;
-            height: 16px;
+            width: 18px;
+            height: 18px;
             background: #fff;
             border-radius: 50%;
-            transition: transform 0.2s;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
         }
         .toggle.on { background: var(--accent); }
         .toggle.on::after { transform: translateX(16px); }
@@ -220,16 +384,18 @@
         .watch-star {
             background: none;
             border: none;
-            font-size: 15px;
+            font-size: 16px;
             line-height: 1;
             cursor: pointer;
-            color: var(--border);
-            padding: 2px 4px;
-            transition: color 0.15s;
+            color: var(--border-strong);
+            padding: 3px 6px;
+            border-radius: 4px;
+            transition: all 0.15s ease;
         }
-        .watch-star:hover { color: var(--text-tertiary); }
-        .watch-star.on { color: var(--accent); }
-        .watch-star.on:hover { color: var(--accent-hover); }
+        .watch-star:hover { color: var(--text-tertiary); background: var(--hover); }
+        .watch-star.on { color: #f59e0b; }
+        .watch-star.on:hover { color: #d97706; }
+        .watch-star:active { transform: scale(1.2); }
         .watch-star:disabled { cursor: wait; opacity: 0.6; }
         .name-star {
             color: var(--accent);
@@ -431,37 +597,52 @@
          */
         .section-tabs {
             display: flex;
-            gap: 2px;
+            gap: 6px;
             border-bottom: 1px solid var(--border);
             margin-bottom: 24px;
             overflow-x: auto;
         }
         .section-tab {
-            padding: 10px 18px;
+            display: inline-flex;
+            align-items: center;
+            padding: 9px 18px;
             border: none;
             background: transparent;
             font-family: var(--font-sans);
             font-size: 14px;
+            font-weight: 500;
             color: var(--text-secondary);
             cursor: pointer;
             border-bottom: 2px solid transparent;
             margin-bottom: -1px;
+            border-radius: 8px 8px 0 0;
             white-space: nowrap;
-            transition: color 0.15s, border-color 0.15s;
+            transition: all 0.15s ease;
         }
-        .section-tab:hover { color: var(--text); }
+        .section-tab:hover {
+            color: var(--text);
+            background: var(--hover);
+        }
         .section-tab.active {
             color: var(--accent);
             font-weight: 600;
             border-bottom-color: var(--accent);
+            background: var(--accent-bg);
         }
         .section-tab .cnt {
             font-variant-numeric: tabular-nums;
-            font-size: 12px;
+            font-size: 11.5px;
+            font-weight: 600;
+            padding: 1px 7px;
+            border-radius: 10px;
+            background: var(--surface-subtle);
             color: var(--text-tertiary);
             margin-left: 6px;
         }
-        .section-tab.active .cnt { color: var(--accent-soft); }
+        .section-tab.active .cnt {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--accent);
+        }
 
         /* 分区容器：隐藏用 hidden 属性而不是 display:none 类名，
          * 这样无障碍树里也只留下当前分区。 */
@@ -576,6 +757,104 @@
         .task-result { margin-top: 14px; }
         .task-status { font-size: 13px; color: var(--text-tertiary); margin-bottom: 14px; }
 
+        /* ── Inspector & Failure Drawers ── */
+        .drawer-tag-chip {
+            padding: 4px 10px;
+            border-radius: 100px;
+            font-size: 12px;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-secondary);
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            user-select: none;
+        }
+        .drawer-tag-chip:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+        .drawer-tag-chip.active {
+            color: #fff;
+            border-color: transparent;
+        }
+        .drawer-article-item {
+            padding: 13px 15px;
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            background: var(--surface-subtle);
+            transition: all 0.15s ease;
+        }
+        .drawer-article-item:hover {
+            background: var(--hover);
+            border-color: var(--border);
+            transform: translateY(-1px);
+        }
+        .drawer-article-title {
+            font-size: 13.5px;
+            font-weight: 600;
+            color: var(--text);
+            line-height: 1.45;
+            margin-bottom: 6px;
+            text-decoration: none;
+            display: block;
+        }
+        .drawer-article-title:hover {
+            color: var(--accent);
+        }
+        .drawer-article-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 11.5px;
+            color: var(--text-tertiary);
+            flex-wrap: wrap;
+        }
+        .drawer-article-badges {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .failure-card {
+            padding: 13px 15px;
+            border: 1px solid var(--border-light);
+            border-left: 3px solid var(--danger);
+            border-radius: 8px;
+            margin-bottom: 10px;
+            background: var(--surface-subtle);
+            transition: all 0.15s ease;
+        }
+        .failure-card:hover {
+            background: var(--hover);
+        }
+        .failure-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .failure-title {
+            font-size: 13.5px;
+            font-weight: 600;
+            color: var(--text);
+            line-height: 1.4;
+        }
+        .failure-err {
+            font-size: 11.5px;
+            color: var(--danger);
+            margin-top: 6px;
+            padding: 6px 10px;
+            background: var(--danger-bg);
+            border-radius: 6px;
+            font-family: monospace;
+            word-break: break-all;
+        }
+
         @media (max-width: 768px) {
             .layout { padding: 20px 16px 48px; }
             .toolbar { gap: 10px; }
@@ -590,9 +869,13 @@
     </style>
 </head>
 <body>
+    <div id="app"></div>
     <div class="header">
         <div class="header-left">
             <h1>管理</h1>
+        </div>
+        <div class="header-right">
+            <button class="btn btn-accent" id="syncBtn" onclick="triggerSync()" aria-label="同步微信数据库">同步数据</button>
         </div>
     </div>
 
@@ -617,6 +900,44 @@
 
         <!-- ── 分区 1 · 账号 ── -->
         <section class="admin-section" id="section-accounts" role="tabpanel" aria-labelledby="tab-accounts">
+        <div class="pipeline-strip" id="pipelineStrip">
+            <div class="pipeline-funnel">
+                <div class="pipeline-title">
+                    <span class="pipeline-dot" id="pipelineDot"></span>
+                    <span>内容流水线</span>
+                </div>
+                <div class="pipeline-steps">
+                    <div class="pipeline-step" title="待抓取/待处理文章">
+                        <span class="step-label">待处理</span>
+                        <span class="step-val" id="pipePending">—</span>
+                    </div>
+                    <span class="pipeline-sep">→</span>
+                    <div class="pipeline-step" title="已导出为本地 Markdown">
+                        <span class="step-label">MD 归档</span>
+                        <span class="step-val" id="pipeExported">—</span>
+                    </div>
+                    <span class="pipeline-sep">→</span>
+                    <div class="pipeline-step" title="已推送到 IMA 知识库">
+                        <span class="step-label">IMA 推送</span>
+                        <span class="step-val" id="pipePushed">—</span>
+                    </div>
+                    <span class="pipeline-sep">→</span>
+                    <div class="pipeline-step" title="已调用 LLM 生成结构化摘要">
+                        <span class="step-label">AI 摘要</span>
+                        <span class="step-val" id="pipeSummarized">—</span>
+                    </div>
+                </div>
+            </div>
+            <div class="pipeline-actions">
+                <button class="btn btn-sm btn-accent" id="pipeTriggerBtn" onclick="triggerPipelineRun()" title="推进当前待处理或重试的文章">
+                    ▶ 推进流水线
+                </button>
+                <button class="badge badge-err" id="pipeFailBtn" style="display: none; cursor: pointer; padding: 5px 10px;" onclick="openPipelineFailuresDrawer()" title="查看失败详情与单篇重试">
+                    ⚠️ <span id="pipeFailCount">0</span> 篇异常
+                </button>
+            </div>
+        </div>
+
         <div class="toolbar">
             <div class="search-box">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -630,8 +951,14 @@
                 <button data-filter="hidden">已隐藏</button>
             </div>
             <button class="watch-chip" id="watchChip">★ 仅关注</button>
+            <button class="watch-chip" id="uncatChip" title="只看尚未分配任何标签的公众号">⚠️ 待分类</button>
             <select class="tag-filter" id="tagFilter">
                 <option value="">全部标签</option>
+            </select>
+            <select class="sort-select" id="sortSelect" onchange="onSortChange()">
+                <option value="articles-desc" selected>发文数倒序</option>
+                <option value="time-desc">最新时间倒序</option>
+                <option value="name-asc">名称排序</option>
             </select>
         </div>
 
@@ -813,6 +1140,69 @@
         </div>
     </div>
 
+    <!-- 公众号画像抽屉 -->
+    <div class="drawer-overlay" id="accountDrawerOverlay" onclick="closeAccountDrawer()"></div>
+    <aside class="drawer" id="accountDrawer" role="dialog" aria-modal="true" aria-labelledby="accountDrawerTitle" aria-hidden="true">
+        <div class="drawer-head">
+            <button type="button" class="drawer-close" onclick="closeAccountDrawer()" aria-label="关闭画像">&times;</button>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <div class="account-avatar" id="drawerAvatar" style="width:40px;height:40px;font-size:16px;">—</div>
+                <div style="min-width:0;">
+                    <h2 class="drawer-title" id="accountDrawerTitle" style="font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">加载中…</h2>
+                    <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px;" id="accountDrawerGhid"></div>
+                </div>
+            </div>
+            <div style="margin-top:14px; display:flex; align-items:center; gap:10px;">
+                <button class="btn btn-sm" id="drawerWatchBtn" onclick="toggleDrawerAccountWatch()">★ 关注</button>
+                <button class="btn btn-sm" id="drawerVisBtn" onclick="toggleDrawerAccountVisibility()">👁️ 隐藏/显示</button>
+                <span style="font-size:12px;color:var(--text-tertiary);margin-left:auto;" id="drawerAccountMeta"></span>
+            </div>
+        </div>
+        <div class="drawer-body">
+            <div style="margin-bottom:22px;">
+                <h4 style="font-size:13px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+                    <span>分类标签</span>
+                    <span style="font-size:11.5px;font-weight:normal;color:var(--text-tertiary);">（点击即时打标/取消）</span>
+                </h4>
+                <div id="drawerTagList" style="display:flex;flex-wrap:wrap;gap:6px;min-height:32px;"></div>
+            </div>
+
+            <div>
+                <h4 style="font-size:13px;font-weight:600;margin-bottom:10px;">最新文章（近 5 篇）</h4>
+                <div id="drawerArticlesList">
+                    <div class="skeleton" style="height:48px;margin-bottom:8px;border-radius:6px;"></div>
+                    <div class="skeleton" style="height:48px;margin-bottom:8px;border-radius:6px;"></div>
+                </div>
+            </div>
+        </div>
+        <div class="drawer-foot">
+            <a class="btn btn-sm" id="drawerToBizLink" href="/biz" target="_blank" rel="noopener" style="flex:1;text-align:center;">
+                👉 在文章流中查看该号全部历史文章
+            </a>
+        </div>
+    </aside>
+
+    <!-- 流水线异常排查抽屉 -->
+    <div class="drawer-overlay" id="pipelineFailuresOverlay" onclick="closePipelineFailuresDrawer()"></div>
+    <aside class="drawer" id="pipelineFailuresDrawer" role="dialog" aria-modal="true" aria-labelledby="pipelineFailuresTitle" aria-hidden="true">
+        <div class="drawer-head">
+            <button type="button" class="drawer-close" onclick="closePipelineFailuresDrawer()" aria-label="关闭异常排查">&times;</button>
+            <h2 class="drawer-title" id="pipelineFailuresTitle" style="font-size:16px;margin:0;">流水线异常排查</h2>
+            <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px;" id="pipelineFailuresMeta">
+                加载中…
+            </div>
+        </div>
+        <div class="drawer-body">
+            <div id="pipelineFailuresList"></div>
+        </div>
+        <div class="drawer-foot">
+            <button class="btn btn-sm btn-accent" onclick="triggerPipelineRun(); closePipelineFailuresDrawer();">
+                全部重跑流水线
+            </button>
+            <button class="btn btn-sm" onclick="closePipelineFailuresDrawer()">关闭</button>
+        </div>
+    </aside>
+
     <div class="toast-container" id="toastContainer"></div>
 
     <script src="/biz/static/bizhub.js"></script>
@@ -884,8 +1274,16 @@
             footer.innerHTML = '';
         }
 
+        let uncatOnly = false;
+        let currentSort = 'articles-desc';
+
+        function onSortChange() {
+            currentSort = document.getElementById('sortSelect').value;
+            renderTable();
+        }
+
         function filteredAccounts() {
-            return accounts.filter(a => {
+            let res = accounts.filter(a => {
                 if (keyword) {
                     const kw = keyword.toLowerCase();
                     const hit = (a.ghName || '').toLowerCase().includes(kw) || (a.ghID || '').toLowerCase().includes(kw);
@@ -896,8 +1294,17 @@
                     if (!(a.tags || []).some(t => t.id === tid)) return false;
                 }
                 if (watchOnly && !a.watched) return false;
+                if (uncatOnly && (a.tags || []).length > 0) return false;
                 return true;
             });
+            if (currentSort === 'articles-desc') {
+                res.sort((a, b) => (b.articleCount || 0) - (a.articleCount || 0));
+            } else if (currentSort === 'time-desc') {
+                res.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            } else if (currentSort === 'name-asc') {
+                res.sort((a, b) => (a.ghName || a.ghID || '').localeCompare(b.ghName || b.ghID || ''));
+            }
+            return res;
         }
 
         function renderTable() {
@@ -912,13 +1319,22 @@
             tbody.innerHTML = rows.map(a => {
                 const tags = (a.tags || []).map(t =>
                     `<span class="cell-tag" style="background:${esc(t.color)}">${esc(t.name)}</span>`).join('');
+                const initial = (a.ghName || a.ghID || '?')[0].toUpperCase();
                 return `<tr class="${a.hidden ? 'row-hidden' : ''}" data-ghid="${esc(a.ghID)}">
                     <td class="col-check"><input type="checkbox" class="row-check" data-ghid="${esc(a.ghID)}" ${selected.has(a.ghID) ? 'checked' : ''} /></td>
                     <td>
-                        <div class="account-name">${a.watched ? '<span class="name-star">★</span>' : ''}${esc(a.ghName) || esc(a.ghID)}</div>
-                        <div class="account-ghid">${esc(a.ghID)}</div>
+                        <div class="account-cell">
+                            <div class="account-avatar">${esc(initial)}</div>
+                            <div style="min-width:0;">
+                                <div class="account-name">
+                                    ${a.watched ? '<span class="name-star">★</span>' : ''}${esc(a.ghName) || esc(a.ghID)}
+                                    <span class="inspect-hint">画像 ›</span>
+                                </div>
+                                <div class="account-ghid">${esc(a.ghID)}</div>
+                            </div>
+                        </div>
                     </td>
-                    <td class="col-tags"><div class="cell-tags">${tags}</div></td>
+                    <td class="col-tags"><div class="cell-tags">${tags || '<span style="font-size:11px;color:var(--text-tertiary);">未分类</span>'}</div></td>
                     <td class="col-count cell-count">${a.articleCount}</td>
                     <td class="cell-time">${formatTime(a.updatedAt)}</td>
                     <td class="col-watch"><button class="watch-star ${a.watched ? 'on' : ''}" data-ghid="${esc(a.ghID)}" title="${a.watched ? '取消关注' : '关注'}">${a.watched ? '★' : '☆'}</button></td>
@@ -1006,6 +1422,10 @@
                     toast(err.message, 'error');
                 }
                 return;
+            }
+            const tr = e.target.closest('tr');
+            if (tr && tr.dataset.ghid) {
+                openAccountDrawer(tr.dataset.ghid);
             }
         });
 
@@ -1097,6 +1517,348 @@
             tagFilterId = e.target.value;
             renderTable();
         });
+
+        document.getElementById('uncatChip').addEventListener('click', () => {
+            uncatOnly = !uncatOnly;
+            document.getElementById('uncatChip').classList.toggle('active', uncatOnly);
+            renderTable();
+        });
+
+        // ── Account Inspector Drawer ──
+        let activeInspectorGhid = null;
+
+        async function openAccountDrawer(ghid) {
+            const acc = accounts.find(a => a.ghID === ghid);
+            if (!acc) return;
+            activeInspectorGhid = ghid;
+
+            document.getElementById('accountDrawerTitle').textContent = acc.ghName || acc.ghID;
+            document.getElementById('accountDrawerGhid').textContent = acc.ghID;
+            const initial = (acc.ghName || acc.ghID || '?')[0].toUpperCase();
+            document.getElementById('drawerAvatar').textContent = initial;
+
+            updateDrawerAccountMeta(acc);
+            renderDrawerTags(acc);
+
+            document.getElementById('drawerToBizLink').href = '/biz?ghid=' + encodeURIComponent(ghid);
+            document.getElementById('accountDrawerOverlay').classList.add('show');
+            const d = document.getElementById('accountDrawer');
+            d.classList.add('show');
+            d.setAttribute('aria-hidden', 'false');
+
+            loadDrawerArticles(ghid);
+        }
+
+        function closeAccountDrawer() {
+            activeInspectorGhid = null;
+            document.getElementById('accountDrawerOverlay').classList.remove('show');
+            const d = document.getElementById('accountDrawer');
+            d.classList.remove('show');
+            d.setAttribute('aria-hidden', 'true');
+        }
+
+        function updateDrawerAccountMeta(acc) {
+            const watchBtn = document.getElementById('drawerWatchBtn');
+            watchBtn.textContent = acc.watched ? '★ 已关注' : '☆ 关注';
+            watchBtn.classList.toggle('btn-accent', acc.watched);
+
+            const visBtn = document.getElementById('drawerVisBtn');
+            visBtn.textContent = acc.hidden ? '👁️ 已隐藏' : '👁️ 显示中';
+
+            document.getElementById('drawerAccountMeta').textContent =
+                `共 ${acc.articleCount} 篇 · 更新于 ${formatTime(acc.updatedAt)}`;
+        }
+
+        function renderDrawerTags(acc) {
+            const container = document.getElementById('drawerTagList');
+            const curTagIDs = new Set((acc.tags || []).map(t => t.id));
+            if (allTags.length === 0) {
+                container.innerHTML = '<span style="font-size:12px;color:var(--text-tertiary);">暂无可选标签</span>';
+                return;
+            }
+            container.innerHTML = allTags.map(t => {
+                const on = curTagIDs.has(t.id);
+                const style = on ? `background:${esc(t.color)};color:#fff;border-color:transparent;` : '';
+                return `<button type="button" class="drawer-tag-chip ${on ? 'active' : ''}" style="${style}" onclick="toggleDrawerTag(${t.id})">
+                    <span class="tag-dot" style="background:${on ? '#fff' : esc(t.color)}"></span>
+                    <span>${esc(t.name)}</span>
+                </button>`;
+            }).join('');
+        }
+
+        async function toggleDrawerTag(tagId) {
+            if (!activeInspectorGhid) return;
+            const acc = accounts.find(a => a.ghID === activeInspectorGhid);
+            if (!acc) return;
+            const curTagIDs = new Set((acc.tags || []).map(t => t.id));
+            if (curTagIDs.has(tagId)) {
+                curTagIDs.delete(tagId);
+            } else {
+                curTagIDs.add(tagId);
+            }
+            const newTagIDs = Array.from(curTagIDs);
+            try {
+                await api('/api/v1/biz/admin/accounts/tags', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ ghIDs: [activeInspectorGhid], tagIDs: newTagIDs, mode: 'replace' })
+                });
+                acc.tags = allTags.filter(t => curTagIDs.has(t.id));
+                renderDrawerTags(acc);
+                renderTable();
+                updateTabCounts();
+                toast('标签已更新');
+            } catch (err) {
+                toast(err.message, 'error');
+            }
+        }
+
+        async function toggleDrawerAccountWatch() {
+            if (!activeInspectorGhid) return;
+            const acc = accounts.find(a => a.ghID === activeInspectorGhid);
+            if (!acc) return;
+            const next = !acc.watched;
+            acc.watched = next;
+            updateDrawerAccountMeta(acc);
+            renderTable();
+            try {
+                await setWatch([activeInspectorGhid], next);
+                toast(next ? '已关注' : '已取消关注');
+            } catch (err) {
+                acc.watched = !next;
+                updateDrawerAccountMeta(acc);
+                renderTable();
+                toast(err.message, 'error');
+            }
+        }
+
+        async function toggleDrawerAccountVisibility() {
+            if (!activeInspectorGhid) return;
+            const acc = accounts.find(a => a.ghID === activeInspectorGhid);
+            if (!acc) return;
+            const next = !acc.hidden;
+            acc.hidden = next;
+            updateDrawerAccountMeta(acc);
+            renderTable();
+            try {
+                await setVisibility([activeInspectorGhid], next);
+                toast(next ? '已隐藏' : '已恢复显示');
+            } catch (err) {
+                acc.hidden = !next;
+                updateDrawerAccountMeta(acc);
+                renderTable();
+                toast(err.message, 'error');
+            }
+        }
+
+        async function loadDrawerArticles(ghid) {
+            const list = document.getElementById('drawerArticlesList');
+            list.innerHTML = '<div style="padding:16px 0;font-size:12px;color:var(--text-tertiary);text-align:center;">正在加载近期文章…</div>';
+            try {
+                const resp = await api('/api/v1/biz/articles?ghid=' + encodeURIComponent(ghid) + '&limit=5');
+                const items = resp.items || [];
+                if (items.length === 0) {
+                    list.innerHTML = '<div style="padding:16px 0;font-size:12px;color:var(--text-tertiary);text-align:center;">暂无文章记录</div>';
+                    return;
+                }
+                list.innerHTML = items.map(a => {
+                    const isExported = a.exportStatus === 'exported' || a.pipelineStatus === 'md_exported' || a.pipelineStatus === 'summarized' || a.pipelineStatus === 'pushed';
+                    const isPushed = a.pushStatus === 'pushed' || a.pipelineStatus === 'pushed';
+                    const isSummarized = a.exportStatus === 'summary_generated' || a.pipelineStatus === 'summarized' || a.pipelineStatus === 'pushed';
+
+                    const mdBadge = isExported
+                        ? '<span class="badge badge-ok">MD 已归档</span>'
+                        : (a.exportStatus === 'failed' ? '<span class="badge badge-err">MD 失败</span>' : '<span class="badge badge-muted">MD 未归档</span>');
+
+                    const pushBadge = isPushed
+                        ? '<span class="badge badge-info">IMA 已入库</span>'
+                        : (a.pushStatus === 'push_failed' ? '<span class="badge badge-err">IMA 失败</span>' : '<span class="badge badge-muted">IMA 未入库</span>');
+
+                    const aiBadge = isSummarized
+                        ? '<span class="badge badge-purple">AI 摘要</span>'
+                        : '<span class="badge badge-muted">无摘要</span>';
+
+                    const exportBtn = !isExported
+                        ? `<button type="button" class="btn btn-sm" onclick="exportArticleInDrawer(${a.id}, this)">📄 导出 MD</button>`
+                        : '';
+
+                    return `<div class="drawer-article-item">
+                        <a class="drawer-article-title" href="${esc(a.url || '#')}" target="_blank" rel="noopener">${esc(a.title || '无标题')}</a>
+                        <div class="drawer-article-meta">
+                            <span>${formatTime(a.publishedAt)}</span>
+                            <div class="drawer-article-badges">
+                                ${mdBadge}
+                                ${pushBadge}
+                                ${aiBadge}
+                                ${exportBtn}
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                list.innerHTML = `<div style="padding:12px;color:var(--danger);font-size:12px;">加载失败：${esc(err.message)}</div>`;
+            }
+        }
+
+        async function exportArticleInDrawer(articleId, btn) {
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '导出中…';
+            }
+            try {
+                await api(`/api/v1/biz/articles/${articleId}/export`, { method: 'POST' });
+                toast('文章已导出为本地 Markdown');
+                if (activeInspectorGhid) loadDrawerArticles(activeInspectorGhid);
+                loadPipelineStatus();
+            } catch (err) {
+                toast(err.message, 'error');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '📄 导出 MD';
+                }
+            }
+        }
+
+        // ── Pipeline Worker Strip & Failures Drawer ──
+        let pipelineStatusData = null;
+
+        async function loadPipelineStatus() {
+            try {
+                const data = await api('/api/v1/biz/admin/pipeline/status');
+                pipelineStatusData = data;
+                renderPipelineStrip(data);
+            } catch (e) {
+                // pipeline status failure does not block other features
+            }
+        }
+
+        function renderPipelineStrip(data) {
+            if (!data) return;
+            const counts = data.counts || {};
+            const totals = data.totals || {};
+
+            const elPending = document.getElementById('pipePending');
+            if (elPending) elPending.textContent = counts.pending || 0;
+
+            const elExported = document.getElementById('pipeExported');
+            if (elExported) elExported.textContent = (counts.md_exported || 0) + (counts.summarized || 0) + (counts.pushed || 0);
+
+            const elPushed = document.getElementById('pipePushed');
+            if (elPushed) elPushed.textContent = counts.pushed || 0;
+
+            const elSummarized = document.getElementById('pipeSummarized');
+            if (elSummarized) elSummarized.textContent = (counts.summarized || 0) + (counts.pushed || 0);
+
+            const failCount = totals.failed || 0;
+            const failBtn = document.getElementById('pipeFailBtn');
+            if (failBtn) {
+                failBtn.style.display = failCount > 0 ? 'inline-flex' : 'none';
+                const countSpan = document.getElementById('pipeFailCount');
+                if (countSpan) countSpan.textContent = failCount;
+            }
+        }
+
+        async function triggerPipelineRun() {
+            const btn = document.getElementById('pipeTriggerBtn');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '⏳ 推进中…';
+            }
+            const dot = document.getElementById('pipelineDot');
+            if (dot) dot.classList.add('pulse');
+            try {
+                await api('/api/v1/biz/admin/pipeline/trigger', { method: 'POST' });
+                toast('已触发内容流水线，后台开始推进');
+                setTimeout(loadPipelineStatus, 800);
+                setTimeout(loadPipelineStatus, 2500);
+            } catch (err) {
+                toast('触发流水线失败: ' + err.message, 'error');
+            } finally {
+                setTimeout(() => {
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = '▶ 推进流水线';
+                    }
+                    if (dot) dot.classList.remove('pulse');
+                }, 1500);
+            }
+        }
+
+        function openPipelineFailuresDrawer() {
+            if (!pipelineStatusData) {
+                loadPipelineStatus();
+            }
+            renderPipelineFailuresDrawer();
+            document.getElementById('pipelineFailuresOverlay').classList.add('show');
+            const d = document.getElementById('pipelineFailuresDrawer');
+            d.classList.add('show');
+            d.setAttribute('aria-hidden', 'false');
+        }
+
+        function closePipelineFailuresDrawer() {
+            document.getElementById('pipelineFailuresOverlay').classList.remove('show');
+            const d = document.getElementById('pipelineFailuresDrawer');
+            d.classList.remove('show');
+            d.setAttribute('aria-hidden', 'true');
+        }
+
+        function renderPipelineFailuresDrawer() {
+            if (!pipelineStatusData) return;
+            const totals = pipelineStatusData.totals || {};
+            const stageFail = pipelineStatusData.failed_by_stage || {};
+            const recent = pipelineStatusData.recent || [];
+
+            document.getElementById('pipelineFailuresMeta').textContent =
+                `共 ${totals.failed || 0} 篇异常 · 抓取: ${stageFail.fetch || 0} · 归档: ${stageFail.mdexport || 0} · 摘要: ${stageFail.summarize || 0} · 推送: ${stageFail.imapush || 0}`;
+
+            const list = document.getElementById('pipelineFailuresList');
+            if (recent.length === 0) {
+                list.innerHTML = '<div style="padding:24px 0;text-align:center;color:var(--text-tertiary);font-size:13px;">暂无失败条目</div>';
+                return;
+            }
+
+            const STAGE_NAME = {
+                fetch: '抓取阶段',
+                mdexport: '归档阶段',
+                summarize: '摘要阶段',
+                imapush: '推送阶段'
+            };
+
+            list.innerHTML = recent.map(it => {
+                const stage = (it.pipeline_status || '').replace('failed:', '');
+                const stageLabel = STAGE_NAME[stage] || stage || '未知阶段';
+                return `<div class="failure-card">
+                    <div class="failure-head">
+                        <div class="failure-title">${esc(it.title || '无标题')}</div>
+                        <button class="btn btn-sm btn-accent" onclick="retryPipelineArticleItem(${it.id}, this)">重试此篇</button>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-tertiary);">
+                        <span>${esc(it.gh_name || it.gh_id || '')}</span>
+                        <span class="badge badge-warn">${esc(stageLabel)}</span>
+                    </div>
+                    <div class="failure-err">${esc(it.pipeline_error || '未知错误')}</div>
+                </div>`;
+            }).join('');
+        }
+
+        async function retryPipelineArticleItem(articleId, btn) {
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '重试中…';
+            }
+            try {
+                await api(`/api/v1/biz/admin/pipeline/retry/${articleId}`, { method: 'POST' });
+                toast('已重置状态并加入重试队列');
+                await loadPipelineStatus();
+                renderPipelineFailuresDrawer();
+            } catch (err) {
+                toast('重试失败: ' + err.message, 'error');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '重试此篇';
+                }
+            }
+        }
 
         // ── Assign tags ──
         function showAssignModal() {
@@ -1354,6 +2116,9 @@
         });
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                if (activeInspectorGhid !== null) { closeAccountDrawer(); return; }
+                const pipeDrawer = document.getElementById('pipelineFailuresDrawer');
+                if (pipeDrawer && pipeDrawer.classList.contains('show')) { closePipelineFailuresDrawer(); return; }
                 document.querySelectorAll('.modal-overlay.show').forEach(el => el.classList.remove('show'));
             }
         });
@@ -1365,6 +2130,11 @@
         // 用户第一次按返回会留在原地而不是退出。
         switchSection(sectionFromURL(), true);
         loadAccounts();
+        loadPipelineStatus();
+        window.onSyncFinished = function() {
+            loadAccounts();
+            loadPipelineStatus();
+        };
 
         // --- 归档任务（MD 归档）---
         //

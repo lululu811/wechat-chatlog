@@ -10,7 +10,10 @@ chatlog.exe
 
 # Build output (handles `make build`)
 /bin/
-dist/
+/dist/
+!internal/chatlog/bizhub/static/dist/**
+frontend/node_modules/
+frontend/dist/
 
 # Dependency directories
 vendor/

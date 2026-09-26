@@ -4,9 +4,9 @@ import (
 	"context"
 	"io"
 
-	"github.com/sjzar/chatlog/internal/errors"
-	"github.com/sjzar/chatlog/internal/wechat/decrypt/darwin"
-	"github.com/sjzar/chatlog/internal/wechat/decrypt/windows"
+	"github.com/chenliitaz/chatlog/internal/errors"
+	"github.com/chenliitaz/chatlog/internal/wechat/decrypt/darwin"
+	"github.com/chenliitaz/chatlog/internal/wechat/decrypt/windows"
 )
 
 // Decryptor 定义数据库解密的接口

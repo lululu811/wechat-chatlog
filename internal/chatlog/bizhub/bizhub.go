@@ -11,15 +11,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/sjzar/chatlog/internal/chatlog/bizhub/imapush"
-	"github.com/sjzar/chatlog/internal/chatlog/bizhub/mdexport"
-	"github.com/sjzar/chatlog/internal/wechatdb"
+	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/imapush"
+	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/mdexport"
+	"github.com/chenliitaz/chatlog/internal/wechatdb"
 )
 
 // Config bizhub 可选的配置源（用于 summary 抓取并发等覆写）。可注入 nil。
@@ -58,8 +59,8 @@ type Service struct {
 	syncer   *Syncer
 	workDir  string
 	config   Config
-	exporter *mdexport.Exporter    // lazy init
-	pusher   *imapush.Exporter    // lazy init
+	exporter *mdexport.Exporter // lazy init
+	pusher   *imapush.Exporter  // lazy init
 
 	// llm 是 LLM 客户端（summarize stage 需要）。由外部在 SetConfig 之后
 	// 调 SetLLM 注入；为空时 summarize stage 立刻报 "llm not configured"，
@@ -1037,11 +1038,11 @@ func (s *Service) GenerateDailyDigest(ctx context.Context, llm *LLMClient, fresh
 
 // SectorSummary 板块聚合数据
 type SectorSummary struct {
-	TagID       int64     `json:"tagId"`
-	TagName     string    `json:"tagName"`
-	Color       string    `json:"color"`
-	ArticleCount int      `json:"articleCount"`
-	TopArticles []Article `json:"topArticles"`
+	TagID        int64     `json:"tagId"`
+	TagName      string    `json:"tagName"`
+	Color        string    `json:"color"`
+	ArticleCount int       `json:"articleCount"`
+	TopArticles  []Article `json:"topArticles"`
 }
 
 // GetSectorDashboard 按标签聚合 watched 账号的近期文章热度
@@ -1267,23 +1268,9 @@ func (s *Service) StartExportJob(req ExportBatchRequest) (*ExportJob, error) {
 // 被判定为不必再跑的条目会以 skipped 状态建出来而不是直接丢弃 ——
 // 用户需要看见「这 3 篇卡在验证码上等你去处理」，而不是让它们从数字里消失。
 func (s *Service) buildExportPlan(req ExportBatchRequest) ([]ExportJobItem, error) {
-	articles, err := s.store.GetUnexportedArticles(req.Days, req.Limit)
+	articles, err := s.store.GetUnexportedArticles(req.Days, req.Limit, req.GHIDs...)
 	if err != nil {
 		return nil, err
-	}
-
-	if len(req.GHIDs) > 0 {
-		ghidSet := make(map[string]struct{}, len(req.GHIDs))
-		for _, ghid := range req.GHIDs {
-			ghidSet[ghid] = struct{}{}
-		}
-		filtered := articles[:0]
-		for _, a := range articles {
-			if _, ok := ghidSet[a.GHID]; ok {
-				filtered = append(filtered, a)
-			}
-		}
-		articles = filtered
 	}
 	if len(articles) == 0 {
 		return nil, nil
@@ -1571,6 +1558,21 @@ func (s *Service) runExportJob(ctx context.Context, jobID string) {
 		}
 	}
 
+	// 汇总整个任务所有条目的真实最终状态，避免因局部统计误判全局
+	allFinished, err := s.store.ListExportJobItems(jobID)
+	totalDone, totalFailed := 0, 0
+	if err == nil {
+		for _, item := range allFinished {
+			if item.Status == ExportItemDone {
+				totalDone++
+			} else if item.Status == ExportItemFailed {
+				totalFailed++
+			}
+		}
+	} else {
+		totalDone, totalFailed = succeeded, failed
+	}
+
 	status, msg := ExportJobDone, ""
 	switch {
 	case ctx.Err() != nil:
@@ -1578,7 +1580,7 @@ func (s *Service) runExportJob(ctx context.Context, jobID string) {
 	case aborted:
 		status = ExportJobFailed
 		msg = "连续触发验证码，本轮已暂停；处理后点「重试」继续"
-	case failed > 0 && succeeded == 0:
+	case totalFailed > 0 && totalDone == 0:
 		status = ExportJobFailed
 		// 全部失败且原因是同一类时把分类说出来。
 		// 「全部条目归档失败」等于没说 —— 用户需要知道的是去装抓取器、还是去过验证码。
@@ -1587,6 +1589,12 @@ func (s *Service) runExportJob(ctx context.Context, jobID string) {
 		} else {
 			msg = "全部条目归档失败"
 		}
+	case totalFailed > 0 && totalDone > 0:
+		status = ExportJobDone
+		msg = fmt.Sprintf("部分条目归档完成（成功 %d 篇，失败 %d 篇）", totalDone, totalFailed)
+	case totalDone > 0:
+		status = ExportJobDone
+		msg = fmt.Sprintf("归档完成（成功 %d 篇）", totalDone)
 	}
 
 	// 先释放并发名额，再写终态。
@@ -1601,7 +1609,7 @@ func (s *Service) runExportJob(ctx context.Context, jobID string) {
 		log.Warn().Err(err).Str("jobID", jobID).Msg("bizhub: 更新归档任务状态失败")
 	}
 	log.Info().Str("jobID", jobID).Str("status", status).
-		Int("succeeded", succeeded).Int("failed", failed).Msg("bizhub: 归档任务结束")
+		Int("succeeded", totalDone).Int("failed", totalFailed).Msg("bizhub: 归档任务结束")
 }
 
 // exportLogStderrLines 单条归档失败日志里保留的 stderr 行数。
@@ -1655,6 +1663,63 @@ func (s *Service) releaseExportJob(jobID string) {
 	}
 }
 
+// findExistingMD 在输出目录检查指定账号和标题的文章是否已存在 Markdown 文件。
+// 微信抓取脚本常将特殊字符（|、:、/、* 等）替换为下划线，此处做归一化容错匹配。
+func findExistingMD(baseDir, account, title string) string {
+	if baseDir == "" || title == "" {
+		return ""
+	}
+	cleanAccount := strings.TrimSpace(account)
+	if cleanAccount == "" {
+		cleanAccount = "default"
+	}
+	accountDir := filepath.Join(baseDir, cleanAccount)
+	if fi, err := os.Stat(accountDir); err != nil || !fi.IsDir() {
+		return ""
+	}
+
+	cleanTitle := strings.TrimSpace(title)
+	directMD := filepath.Join(accountDir, cleanTitle, cleanTitle+".md")
+	if fi, err := os.Stat(directMD); err == nil && !fi.IsDir() {
+		return directMD
+	}
+
+	entries, err := os.ReadDir(accountDir)
+	if err != nil {
+		return ""
+	}
+
+	norm := func(s string) string {
+		var b strings.Builder
+		for _, r := range s {
+			if r == '|' || r == ':' || r == '：' || r == '%' || r == '/' || r == '\\' ||
+				r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '_' ||
+				r == ' ' || r == '\u00a0' {
+				continue
+			}
+			b.WriteRune(r)
+		}
+		return b.String()
+	}
+	normTarget := norm(cleanTitle)
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if e.Name() == cleanTitle || (normTarget != "" && norm(e.Name()) == normTarget) {
+			subDir := filepath.Join(accountDir, e.Name())
+			subEntries, _ := os.ReadDir(subDir)
+			for _, se := range subEntries {
+				if !se.IsDir() && strings.HasSuffix(se.Name(), ".md") {
+					return filepath.Join(subDir, se.Name())
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // runExportItem 归档单篇，并把结果写回条目与归档记录。
 func (s *Service) runExportItem(ctx context.Context, exp *mdexport.Exporter, it ExportJobItem) ExportJobItem {
 	it.Status = ExportItemRunning
@@ -1668,6 +1733,31 @@ func (s *Service) runExportItem(ctx context.Context, exp *mdexport.Exporter, it 
 		it.Error = "文章已不存在（可能已被重新同步移除）"
 		_ = s.store.UpdateExportJobItem(it)
 		return it
+	}
+
+	// 1. 检查数据库是否已标记导出（支持快速续传/幂等保护）
+	if isExp, _ := s.store.IsArticleExported(article.ID); isExp {
+		rec, _ := s.store.GetExportRecord(article.ID)
+		mdPath := ""
+		if rec != nil {
+			mdPath = rec.MDPath
+		}
+		it.Status = ExportItemDone
+		it.MDPath = mdPath
+		_ = s.store.UpdateExportJobItem(it)
+		return it
+	}
+
+	// 2. 检查输出目录下是否已有 Markdown 产出（避免重复调用外部脚本重新抓取）
+	if exp != nil && exp.OutputDir() != "" {
+		if existingMD := findExistingMD(exp.OutputDir(), article.GHName, article.Title); existingMD != "" {
+			it.Status = ExportItemDone
+			it.MDPath = existingMD
+			_ = s.store.UpdateExportJobItem(it)
+			_ = s.store.UpsertExportRecord(article.ID, article.URL, existingMD, "",
+				ExportStatusExported, "", "")
+			return it
+		}
 	}
 
 	itemCtx, cancel := context.WithTimeout(ctx, exportItemTimeout)

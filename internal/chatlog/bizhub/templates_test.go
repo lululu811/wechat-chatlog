@@ -417,10 +417,10 @@ func TestExportWindowOptionsCoverBackendMax(t *testing.T) {
 // TestThemeToggleIsPresentAndConsistent 防止主题切换被改丢或改坏。
 //
 // 重点关注三个会静默默回退的点：
-//   1. 按钮从公共导航消失 → 三页同时丢；
-//   2. 防闪烁脚本被放到样式表后面 → 首帧先闪一帧错误底色；
-//   3. 暗色令牌又改回 @media(prefers-color-scheme:dark){ :root {...} } ——
-//      那会和 JS 显式设置的数据来源打架，出现「跟随系统」与「显式指定」无法区分的混乱。
+//  1. 按钮从公共导航消失 → 三页同时丢；
+//  2. 防闪烁脚本被放到样式表后面 → 首帧先闪一帧错误底色；
+//  3. 暗色令牌又改回 @media(prefers-color-scheme:dark){ :root {...} } ——
+//     那会和 JS 显式设置的数据来源打架，出现「跟随系统」与「显式指定」无法区分的混乱。
 func TestThemeToggleIsPresentAndConsistent(t *testing.T) {
 	layout := readTemplate(t, "layout.html")
 
@@ -468,5 +468,53 @@ func TestThemeToggleIsPresentAndConsistent(t *testing.T) {
 	legacyDark := regexp.MustCompile(`@media\s*\(\s*prefers-color-scheme\s*:\s*dark\s*\)\s*\{\s*:root\s*\{`)
 	if legacyDark.MatchString(css) {
 		t.Error("bizhub.css 暗色令牌不能走 @media (prefers-color-scheme: dark) :root —— 与 JS 三态会冲突")
+	}
+}
+
+// TestAdminInspectorAndPipelineDrawersExist 锁定闭环改造中的关键交互组件：
+// 1. 公众号画像抽屉（accountDrawer）
+// 2. 内容流水线看板条（pipelineStrip）与触发按钮
+// 3. 异常排查抽屉（pipelineFailuresDrawer）
+// 4. 未分类快捷筛选（uncatChip）与排序下拉（sortSelect）
+func TestAdminInspectorAndPipelineDrawersExist(t *testing.T) {
+	src := readTemplate(t, "admin.html")
+
+	requiredIDs := []string{
+		"pipelineStrip",
+		"pipeTriggerBtn",
+		"pipePending",
+		"pipeExported",
+		"pipePushed",
+		"pipeSummarized",
+		"accountDrawer",
+		"accountDrawerOverlay",
+		"drawerTagList",
+		"drawerArticlesList",
+		"pipelineFailuresDrawer",
+		"pipelineFailuresOverlay",
+		"pipelineFailuresList",
+		"uncatChip",
+		"sortSelect",
+	}
+
+	for _, id := range requiredIDs {
+		if !strings.Contains(src, `id="`+id+`"`) {
+			t.Errorf("admin.html 缺少关键元素 id=%q", id)
+		}
+	}
+
+	requiredFns := []string{
+		"openAccountDrawer",
+		"closeAccountDrawer",
+		"loadPipelineStatus",
+		"triggerPipelineRun",
+		"openPipelineFailuresDrawer",
+		"closePipelineFailuresDrawer",
+	}
+
+	for _, fn := range requiredFns {
+		if !strings.Contains(src, "function "+fn+"(") {
+			t.Errorf("admin.html 缺少关键交互函数 %s", fn)
+		}
 	}
 }

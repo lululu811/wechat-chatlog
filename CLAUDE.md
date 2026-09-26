@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 chatlog is a Go tool for extracting, decrypting, and serving WeChat chat history from local SQLite database files. It supports Windows and macOS, WeChat 3.x and 4.x, and exposes data via Terminal UI, HTTP API, MCP Streamable HTTP, and Webhook.
 
-Module: `github.com/sjzar/chatlog` · Go 1.24 · **CGO required** (mattn/go-sqlite3, sjzar/go-silk, sjzar/go-lame).
+Module: `github.com/chenliitaz/chatlog` · Go 1.24 · **CGO required** (mattn/go-sqlite3, sjzar/go-silk, sjzar/go-lame).
 
 ## Common commands
 

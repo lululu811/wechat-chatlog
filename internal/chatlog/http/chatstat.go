@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/sjzar/chatlog/internal/errors"
+	"github.com/chenliitaz/chatlog/internal/errors"
 )
 
 const (

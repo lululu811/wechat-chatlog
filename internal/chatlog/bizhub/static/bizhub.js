@@ -280,21 +280,83 @@ function watchLoadMore() {
 }
 
 function setSyncing(btn, data) {
+    if (!btn) return;
     const total = data && data.accountCount ? data.accountCount : 0;
     const done = data && data.lastSync && data.lastSync.accounts ? data.lastSync.accounts.length : 0;
     btn.innerHTML = done > 0 && total > 0 ? `同步中 ${done}/${total}` : `同步中${SYNC_DOTS}`;
 }
 
+async function pollSyncStatus() {
+    const btn = document.getElementById('syncBtn');
+    const origText = (btn && (btn.dataset.originalText || btn.textContent)) || '同步';
+    if (btn) {
+        btn.dataset.originalText = origText;
+        btn.disabled = true;
+    }
+
+    const check = async () => {
+        try {
+            const resp = await apiFetch('/api/v1/biz/status');
+            const data = await resp.json();
+            if (data.syncing) {
+                if (btn) setSyncing(btn, data);
+                setTimeout(check, 1000);
+            } else {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = origText;
+                }
+                let newCount = 0;
+                if (data.lastSync && data.lastSync.accounts) {
+                    newCount = data.lastSync.accounts.reduce((sum, a) => sum + (a.newCount || 0), 0);
+                }
+                if (newCount > 0) {
+                    toast(`同步完成：新增 ${newCount} 篇新文章`);
+                } else {
+                    toast(`同步完成：暂无新文章（共 ${data.articleCount || 0} 篇）`);
+                }
+                if (typeof window.onSyncFinished === 'function') {
+                    window.onSyncFinished(data);
+                }
+            }
+        } catch (err) {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = origText;
+            }
+            toast('获取同步状态失败', 'error');
+        }
+    };
+    setTimeout(check, 600);
+}
+
 async function triggerSync() {
     const btn = document.getElementById('syncBtn');
-    btn.disabled = true;
-    btn.innerHTML = `同步中${SYNC_DOTS}`;
+    if (btn) {
+        if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+        btn.disabled = true;
+        btn.innerHTML = `同步中${SYNC_DOTS}`;
+    }
+    toast('开始同步微信数据库…');
     try {
         const resp = await apiFetch('/api/v1/biz/sync', { method: 'POST' });
         const data = await resp.json();
-        if (data.error) { toast(data.error, 'error'); btn.disabled = false; btn.textContent = '同步'; }
-        else pollSyncStatus();
-    } catch (err) { toast('同步失败', 'error'); btn.disabled = false; btn.textContent = '同步'; }
+        if (data.error) {
+            toast(data.error, 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = btn.dataset.originalText || '同步';
+            }
+        } else {
+            pollSyncStatus();
+        }
+    } catch (err) {
+        toast('同步请求失败: ' + err.message, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = btn.dataset.originalText || '同步';
+        }
+    }
 }
 
 /* ---------- 主题切换：白天 / 夜晚 / 跟随系统 ---------- */

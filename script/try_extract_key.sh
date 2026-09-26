@@ -1,9 +1,14 @@
 #!/bin/bash
 # chatlog 密钥提取 — 试跑 + 智能诊断
-# precheck.sh 全过后跑这个
-# 临时辅助脚本,用完可删
+# 前提: precheck.sh 全过
+# 用法: ./script/try_extract_key.sh   （可用 CHATLOG_BIN 指定二进制路径）
 
 set -e
+
+# 二进制默认取仓库内 bin/chatlog，可用 CHATLOG_BIN 覆盖（已装到 PATH 也行）
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="${CHATLOG_BIN:-$REPO_ROOT/bin/chatlog}"
+
 
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
@@ -12,7 +17,6 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-BIN="/Users/chenlei/002_tools/chatlog/bin/chatlog"
 WX_PID=$(pgrep -f "/Applications/WeChat.app/Contents/MacOS/WeChat$" | head -1)
 
 if [ -z "$WX_PID" ]; then
@@ -91,7 +95,7 @@ if echo "$OUTPUT" | grep -qi "pattern\|validator\|valid key\|no.*key.*found"; th
   echo -e "${YELLOW}⚠️  4.1.34 pattern 不适配 (chatlog 上游还没适配这个版本)${NC}"
   echo
   echo "这是上游问题,chatlog V4 extractor 用硬编码 pattern:"
-  echo "  https://github.com/sjzar/chatlog/blob/main/internal/wechat/key/darwin/v4.go"
+  echo "  https://github.com/chenliitaz/chatlog/blob/main/internal/wechat/key/darwin/v4.go"
   echo
   echo "路径 C — 自己分析新 pattern:"
   echo "  1. dump 微信进程内存: lldb -p $WX_PID -o 'process save-core /tmp/wx-core' -o 'quit'"
