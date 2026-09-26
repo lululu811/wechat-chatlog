@@ -1,4 +1,4 @@
-module github.com/chenliitaz/chatlog
+module github.com/lululu811/wechat-chatlog
 
 go 1.24.0
 

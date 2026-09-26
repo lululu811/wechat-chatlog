@@ -73,10 +73,10 @@ C:\Users\{用户名}\Documents\xwechat_files\{微信ID}
 chatlog 的镜像发布在 GitHub Container Registry (ghcr)：
 
 ```shell
-docker pull ghcr.io/chenliitaz/chatlog:latest
+docker pull ghcr.io/lululu811/wechat-chatlog:latest
 ```
 
-> 💡 **镜像地址**: https://ghcr.io/chenliitaz/chatlog
+> 💡 **镜像地址**: https://ghcr.io/lululu811/wechat-chatlog
 
 > ℹ️ 镜像的 tag 规则：正式版为 `vX.Y.Z` / `latest`，预览版为 `vX.Y.Z-rcN`（不含 `latest`）。
 
@@ -91,7 +91,7 @@ docker run -d \
   --name chatlog \
   -p 5030:5030 \
   -v /path/to/your/wechat/data:/app/data \
-  ghcr.io/chenliitaz/chatlog:latest
+  ghcr.io/lululu811/wechat-chatlog:latest
 ```
 
 > 这种部署方式依赖于数据目录下的 chatlog.json 文件作为配置，通过 chatlog 获取密钥时将自动更新 chatlog.json 文件
@@ -113,7 +113,7 @@ docker run -d \
   -v /path/to/your/wechat/data:/app/data \
   -v /path/to/work:/app/work \
   --restart unless-stopped \
-  ghcr.io/chenliitaz/chatlog:latest
+  ghcr.io/lululu811/wechat-chatlog:latest
 ```
 
 ### Docker Compose 方式
@@ -125,7 +125,7 @@ version: '3.8'
 
 services:
   chatlog:
-    image: ghcr.io/chenliitaz/chatlog:latest
+    image: ghcr.io/lululu811/wechat-chatlog:latest
     restart: unless-stopped
     ports:
       - "5030:5030"  # 可修改主机端口，如 "8080:5030"
@@ -349,4 +349,4 @@ ports:
   - "8080:5030"
 ```
 
-> 💡 **获取更多帮助**: 如遇到其他问题，请查看项目的 [Issues](https://github.com/chenliitaz/chatlog/issues) 页面或提交新的问题反馈。
+> 💡 **获取更多帮助**: 如遇到其他问题，请查看项目的 [Issues](https://github.com/lululu811/wechat-chatlog/issues) 页面或提交新的问题反馈。

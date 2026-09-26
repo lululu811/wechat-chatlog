@@ -2,7 +2,7 @@
 
 聊天记录工具 — 微信本地数据库解密、TUI / HTTP API / MCP 服务，支持多账号、图片/语音 (wxgf/silk) 解码。
 
-Module: `github.com/chenliitaz/chatlog` · Go 1.24 · CGO required (mattn/go-sqlite3, go-silk, go-lame)
+Module: `github.com/lululu811/wechat-chatlog` · Go 1.24 · CGO required (mattn/go-sqlite3, go-silk, go-lame)
 
 ## Setup commands
 

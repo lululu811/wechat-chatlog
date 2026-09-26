@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chenliitaz/chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
 )
 
 const (

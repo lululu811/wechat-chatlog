@@ -1,16 +1,21 @@
-chatlog
+wechat-chatlog
 Copyright 2024 The chatlog Authors (original project: sjzar/chatlog)
-Copyright 2026 The chatlog Authors (this fork)
+Copyright 2026 The wechat-chatlog Authors (this fork)
 
 This product includes software developed as part of the chatlog project
 (https://github.com/sjzar/chatlog), licensed under the Apache License,
 Version 2.0.
 
+The distributed binary is still named `chatlog`; the repository was renamed to
+wechat-chatlog to reflect its focus on multi-account Official Account
+management. The rename does not change the license of any part of the work.
+
 --------------------------------------------------------------------------------
 Attribution
 --------------------------------------------------------------------------------
 
-This repository is a fork of sjzar/chatlog. The original project is:
+This repository (https://github.com/lululu811/wechat-chatlog) is a fork of
+sjzar/chatlog. The original project is:
 
   chatlog — 聊天记录工具
   https://github.com/sjzar/chatlog

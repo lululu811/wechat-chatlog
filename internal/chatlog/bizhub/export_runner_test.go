@@ -12,8 +12,8 @@ import (
 	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/mdexport"
-	"github.com/chenliitaz/chatlog/internal/model"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/bizhub/mdexport"
+	"github.com/lululu811/wechat-chatlog/internal/model"
 )
 
 // 本文件是归档跑批的端到端验证：用一个替身脚本把抓取器的行为变成可编程的，

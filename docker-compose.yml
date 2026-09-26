@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   chatlog:
-    image: ghcr.io/chenliitaz/chatlog:latest
+    image: ghcr.io/lululu811/wechat-chatlog:latest
     restart: unless-stopped
     ports:
       # 将主机的 5030 端口映射到 chatlog 容器的 5030 端口

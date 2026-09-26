@@ -7,8 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/errors"
-	"github.com/chenliitaz/chatlog/internal/model"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/internal/model"
 )
 
 // initChatRoomCache 初始化群聊缓存

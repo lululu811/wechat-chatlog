@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/database"
 	"github.com/gin-gonic/gin"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/database"
 )
 
 func corsMiddleware() gin.HandlerFunc {

@@ -9,8 +9,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/chenliitaz/chatlog/internal/errors"
-	"github.com/chenliitaz/chatlog/internal/wechat/decrypt/common"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/internal/wechat/decrypt/common"
 
 	"golang.org/x/crypto/pbkdf2"
 )

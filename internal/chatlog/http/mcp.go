@@ -11,10 +11,10 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/conf"
-	"github.com/chenliitaz/chatlog/internal/errors"
-	"github.com/chenliitaz/chatlog/pkg/util"
-	"github.com/chenliitaz/chatlog/pkg/version"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/conf"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/pkg/util"
+	"github.com/lululu811/wechat-chatlog/pkg/version"
 )
 
 func (s *Service) initMCPServer() {

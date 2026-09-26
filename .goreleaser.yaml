@@ -13,7 +13,7 @@ builds:
   - id: chatlog-builds
     binary: chatlog
     ldflags:
-      - -s -w -X github.com/chenliitaz/chatlog/pkg/version.Version={{.Version}}
+      - -s -w -X github.com/lululu811/wechat-chatlog/pkg/version.Version={{.Version}}
     env:
       - CGO_ENABLED=1
     goos:

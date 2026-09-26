@@ -7,11 +7,11 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/conf"
-	"github.com/chenliitaz/chatlog/internal/chatlog/webhook"
-	"github.com/chenliitaz/chatlog/internal/errors"
-	"github.com/chenliitaz/chatlog/internal/model"
-	"github.com/chenliitaz/chatlog/internal/wechatdb"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/conf"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/webhook"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/internal/model"
+	"github.com/lululu811/wechat-chatlog/internal/wechatdb"
 )
 
 const (

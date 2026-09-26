@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/imapush"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/bizhub/imapush"
 )
 
 // pushFakeIMAScript 与 imapush/script_contract_test.go 的 fakeIMAScript 等价的 inline 版本。

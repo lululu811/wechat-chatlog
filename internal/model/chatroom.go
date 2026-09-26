@@ -1,7 +1,7 @@
 package model
 
 import (
-	"github.com/chenliitaz/chatlog/internal/model/wxproto"
+	"github.com/lululu811/wechat-chatlog/internal/model/wxproto"
 
 	"google.golang.org/protobuf/proto"
 )

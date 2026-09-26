@@ -7,7 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v4/process"
 
-	"github.com/chenliitaz/chatlog/internal/wechat/model"
+	"github.com/lululu811/wechat-chatlog/internal/wechat/model"
 )
 
 // initializeProcessInfo 获取进程的数据目录和账户名

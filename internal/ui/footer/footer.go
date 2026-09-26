@@ -3,8 +3,8 @@ package footer
 import (
 	"fmt"
 
-	"github.com/chenliitaz/chatlog/internal/ui/style"
-	"github.com/chenliitaz/chatlog/pkg/version"
+	"github.com/lululu811/wechat-chatlog/internal/ui/style"
+	"github.com/lululu811/wechat-chatlog/pkg/version"
 
 	"github.com/rivo/tview"
 )

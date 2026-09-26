@@ -11,8 +11,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/conf"
-	"github.com/chenliitaz/chatlog/internal/wechatdb"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/conf"
+	"github.com/lululu811/wechat-chatlog/internal/wechatdb"
 )
 
 type Config interface {

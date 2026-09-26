@@ -10,10 +10,10 @@ _把关注的多个公众号集中管理：按账号归档、标签分类、收�
 
 [![ImgMCP](https://cdn.imgmcp.com/imgmcp-logo-small.png)](https://imgmcp.com)
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/chenliitaz/chatlog)](https://goreportcard.com/report/github.com/chenliitaz/chatlog)
-[![GoDoc](https://godoc.org/github.com/chenliitaz/chatlog?status.svg)](https://godoc.org/github.com/chenliitaz/chatlog)
-[![GitHub release](https://img.shields.io/github/release/chenliitaz/chatlog.svg)](https://github.com/chenliitaz/chatlog/releases)
-[![GitHub license](https://img.shields.io/github/license/chenliitaz/chatlog.svg)](https://github.com/chenliitaz/chatlog/blob/main/LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/lululu811/wechat-chatlog)](https://goreportcard.com/report/github.com/lululu811/wechat-chatlog)
+[![GoDoc](https://godoc.org/github.com/lululu811/wechat-chatlog?status.svg)](https://godoc.org/github.com/lululu811/wechat-chatlog)
+[![GitHub release](https://img.shields.io/github/release/lululu811/wechat-chatlog.svg)](https://github.com/lululu811/wechat-chatlog/releases)
+[![GitHub license](https://img.shields.io/github/license/lululu811/wechat-chatlog.svg)](https://github.com/lululu811/wechat-chatlog/blob/main/LICENSE)
 
 
 </div>
@@ -102,14 +102,14 @@ _把关注的多个公众号集中管理：按账号归档、标签分类、收�
 ### 从源码安装
 
 ```bash
-go install github.com/chenliitaz/chatlog@latest
+go install github.com/lululu811/wechat-chatlog@latest
 ```
 
 > 💡 **提示**: 部分功能有 cgo 依赖，编译前需确认本地有 C 编译环境。
 
 ### 下载预编译版本
 
-访问 [Releases](https://github.com/chenliitaz/chatlog/releases) 页面下载适合您系统的预编译版本。
+访问 [Releases](https://github.com/lululu811/wechat-chatlog/releases) 页面下载适合您系统的预编译版本。
 
 ## 使用指南
 
@@ -168,10 +168,10 @@ Image Key: [38636***653361]
 镜像发布在 GitHub Container Registry (ghcr)：
 
 ```shell
-docker pull ghcr.io/chenliitaz/chatlog:latest
+docker pull ghcr.io/lululu811/wechat-chatlog:latest
 ```
 
-> 💡 **镜像地址**: https://ghcr.io/chenliitaz/chatlog
+> 💡 **镜像地址**: https://ghcr.io/lululu811/wechat-chatlog
 
 > ℹ️ 镜像的 tag 规则：正式版为 `vX.Y.Z` / `latest`，预览版为 `vX.Y.Z-rcN`（不含 `latest`）。
 
@@ -183,7 +183,7 @@ $ docker run -d \
   --name chatlog \
   -p 5030:5030 \
   -v /path/to/your/wechat/data:/app/data \
-  ghcr.io/chenliitaz/chatlog:latest
+  ghcr.io/lululu811/wechat-chatlog:latest
 ```
 
 **3. 启用公众号汇总 / LLM 摘要（可选）**
@@ -519,7 +519,7 @@ Chatlog 可以与多种支持 MCP 的 AI 助手集成，包括：
 
 查看 [Prompt 指南](docs/prompt.md) 获取详细示例。
 
-同时欢迎大家分享使用经验和 prompt！如果您有好的 prompt 示例或使用技巧，请通过 [Discussions](https://github.com/chenliitaz/chatlog/discussions) 进行分享，共同进步。
+同时欢迎大家分享使用经验和 prompt！如果您有好的 prompt 示例或使用技巧，请通过 [Discussions](https://github.com/lululu811/wechat-chatlog/discussions) 进行分享，共同进步。
 
 ## 免责声明
 

@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/chenliitaz/chatlog/pkg/config"
+	"github.com/lululu811/wechat-chatlog/pkg/config"
 	"github.com/rs/zerolog/log"
 )
 

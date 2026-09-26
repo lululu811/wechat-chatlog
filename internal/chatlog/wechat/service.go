@@ -13,11 +13,11 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/errors"
-	"github.com/chenliitaz/chatlog/internal/wechat"
-	"github.com/chenliitaz/chatlog/internal/wechat/decrypt"
-	"github.com/chenliitaz/chatlog/pkg/filemonitor"
-	"github.com/chenliitaz/chatlog/pkg/util"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/internal/wechat"
+	"github.com/lululu811/wechat-chatlog/internal/wechat/decrypt"
+	"github.com/lululu811/wechat-chatlog/pkg/filemonitor"
+	"github.com/lululu811/wechat-chatlog/pkg/util"
 )
 
 var (

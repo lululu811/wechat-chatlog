@@ -3,7 +3,7 @@
 package windows
 
 import (
-	"github.com/chenliitaz/chatlog/internal/wechat/model"
+	"github.com/lululu811/wechat-chatlog/internal/wechat/model"
 	"github.com/shirou/gopsutil/v4/process"
 )
 

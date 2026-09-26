@@ -18,9 +18,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/imapush"
-	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/mdexport"
-	"github.com/chenliitaz/chatlog/internal/wechatdb"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/bizhub/imapush"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/bizhub/mdexport"
+	"github.com/lululu811/wechat-chatlog/internal/wechatdb"
 )
 
 // Config bizhub 可选的配置源（用于 summary 抓取并发等覆写）。可注入 nil。

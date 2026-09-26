@@ -3,7 +3,7 @@ package chatlog
 import (
 	"fmt"
 
-	"github.com/chenliitaz/chatlog/pkg/version"
+	"github.com/lululu811/wechat-chatlog/pkg/version"
 
 	"github.com/spf13/cobra"
 )

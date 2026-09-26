@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/conf"
-	"github.com/chenliitaz/chatlog/internal/wechat"
-	"github.com/chenliitaz/chatlog/pkg/config"
-	"github.com/chenliitaz/chatlog/pkg/util"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/conf"
+	"github.com/lululu811/wechat-chatlog/internal/wechat"
+	"github.com/lululu811/wechat-chatlog/pkg/config"
+	"github.com/lululu811/wechat-chatlog/pkg/util"
 	"github.com/rs/zerolog/log"
 )
 

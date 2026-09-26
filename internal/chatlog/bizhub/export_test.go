@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/mdexport"
-	"github.com/chenliitaz/chatlog/internal/model"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/bizhub/mdexport"
+	"github.com/lululu811/wechat-chatlog/internal/model"
 )
 
 const (

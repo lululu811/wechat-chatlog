@@ -95,7 +95,7 @@ if echo "$OUTPUT" | grep -qi "pattern\|validator\|valid key\|no.*key.*found"; th
   echo -e "${YELLOW}⚠️  4.1.34 pattern 不适配 (chatlog 上游还没适配这个版本)${NC}"
   echo
   echo "这是上游问题,chatlog V4 extractor 用硬编码 pattern:"
-  echo "  https://github.com/chenliitaz/chatlog/blob/main/internal/wechat/key/darwin/v4.go"
+  echo "  https://github.com/lululu811/wechat-chatlog/blob/main/internal/wechat/key/darwin/v4.go"
   echo
   echo "路径 C — 自己分析新 pattern:"
   echo "  1. dump 微信进程内存: lldb -p $WX_PID -o 'process save-core /tmp/wx-core' -o 'quit'"

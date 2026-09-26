@@ -13,9 +13,9 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub"
-	"github.com/chenliitaz/chatlog/internal/chatlog/database"
-	"github.com/chenliitaz/chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/bizhub"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/database"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
 )
 
 type Service struct {

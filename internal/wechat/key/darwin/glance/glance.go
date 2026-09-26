@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chenliitaz/chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
 	"github.com/rs/zerolog/log"
 )
 

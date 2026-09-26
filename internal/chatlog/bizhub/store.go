@@ -18,9 +18,9 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 
-	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/imapush"
-	"github.com/chenliitaz/chatlog/internal/chatlog/bizhub/mdexport"
-	"github.com/chenliitaz/chatlog/internal/model"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/bizhub/imapush"
+	"github.com/lululu811/wechat-chatlog/internal/chatlog/bizhub/mdexport"
+	"github.com/lululu811/wechat-chatlog/internal/model"
 )
 
 // HashURL 返回 URL 的 md5 hex 哈希（用于 biz_article_contents 主键）

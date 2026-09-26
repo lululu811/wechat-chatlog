@@ -3,7 +3,7 @@ package help
 import (
 	"fmt"
 
-	"github.com/chenliitaz/chatlog/internal/ui/style"
+	"github.com/lululu811/wechat-chatlog/internal/ui/style"
 
 	"github.com/rivo/tview"
 )

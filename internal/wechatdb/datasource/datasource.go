@@ -6,11 +6,11 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/chenliitaz/chatlog/internal/errors"
-	"github.com/chenliitaz/chatlog/internal/model"
-	"github.com/chenliitaz/chatlog/internal/wechatdb/datasource/darwinv3"
-	v4 "github.com/chenliitaz/chatlog/internal/wechatdb/datasource/v4"
-	"github.com/chenliitaz/chatlog/internal/wechatdb/datasource/windowsv3"
+	"github.com/lululu811/wechat-chatlog/internal/errors"
+	"github.com/lululu811/wechat-chatlog/internal/model"
+	"github.com/lululu811/wechat-chatlog/internal/wechatdb/datasource/darwinv3"
+	v4 "github.com/lululu811/wechat-chatlog/internal/wechatdb/datasource/v4"
+	"github.com/lululu811/wechat-chatlog/internal/wechatdb/datasource/windowsv3"
 )
 
 type DataSource interface {
