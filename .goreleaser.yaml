@@ -83,6 +83,11 @@ archives:
       - LICENSE
       - NOTICE
       - README.md
+      - DISCLAIMER.md
+      - CONTRIBUTING.md
+      - SUPPORT.md
+      - SECURITY.md
+      - CODE_OF_CONDUCT.md
 
 checksum:
   name_template: 'checksums.txt'

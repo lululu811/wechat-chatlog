@@ -4,7 +4,9 @@
 
 <sub>HTTP 服务启动后的 API 控制台（`http://127.0.0.1:5030/`）</sub>
 
-_聊天记录工具，帮助大家轻松使用自己的聊天数据_
+_把关注的多个公众号集中管理：按账号归档、标签分类、收藏、LLM 汇总_
+
+<sub>本地运行的公众号文章管理与摘要工具 · 数据不出本机</sub>
 
 [![ImgMCP](https://cdn.imgmcp.com/imgmcp-logo-small.png)](https://imgmcp.com)
 
@@ -16,28 +18,63 @@ _聊天记录工具，帮助大家轻松使用自己的聊天数据_
 
 </div>
 
+> [!IMPORTANT]
+> **本仓库是 [sjzar/chatlog](https://github.com/sjzar/chatlog) 的 fork，属于个人二次开发项目，
+> 不提供任何技术支持。** Issue 不回复、不处理，PR 不保证审阅或合并。
+> 遇到密钥提取、解密、数据库解析等问题，请去 [上游仓库](https://github.com/sjzar/chatlog/issues)。
+> 详见 [SUPPORT.md](./SUPPORT.md) 与 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+
 > [!NOTE]
-> **本仓库是 [sjzar/chatlog](https://github.com/sjzar/chatlog) 的 fork。**
-> 上游项目由 Sarv 及社区贡献者创建，本仓库在其基础上增加了公众号汇总（bizhub）、
-> 独立 Vue 前端、`chatstat` 统计命令与访问鉴权，并修复了若干并发与安全问题。
-> 遵循 Apache-2.0 §4(d)，上游版权声明完整保留在 `LICENSE`，修改说明见 [`NOTICE`](./NOTICE)。
+> **上游与本 fork 的关系**
+>
+> 上游 chatlog 由 Sarv 及社区贡献者创建，提供了本地数据读取的底座。
+> 本 fork 在其之上开发了**公众号汇总（bizhub）**——多公众号文章归档与管理——
+> 以及配套的 Vue 前端、`chatstat` 统计命令、HTTP 访问鉴权与 API 控制台，并修复了若干并发与安全问题。
+>
+> 遵循 Apache-2.0 §4(d)，上游版权声明完整保留在 `LICENSE`，修改清单见 [`NOTICE`](./NOTICE)。
 > **本 README 中的安装、镜像、Issue、Discussion 均指向本 fork**；仅少数上游独有的内容
 > （如 FAQ issue）保留上游链接。
+>
+> **PR 提交规则**：改动上游已有代码的，请提给上游，不要在这里提。
+> 本仓库只接收公众号汇总、统计、鉴权、前端与 CI 相关的改动。
+> 详见 [CONTRIBUTING.md](./CONTRIBUTING.md#1-pr-该提到哪里)。
+
+### 仓库文档
+
+| 文档 | 内容 |
+|---|---|
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | 贡献规则，**含 PR 该提到哪里** |
+| [SUPPORT.md](./SUPPORT.md) | 不提供技术支持；问题分流表 |
+| [SECURITY.md](./SECURITY.md) | 安全策略：不要公开报漏洞、禁止提交的内容 |
+| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | 行为准则 |
+| [NOTICE](./NOTICE) | 上游版权与本 fork 的修改清单 |
+| [DISCLAIMER.md](./DISCLAIMER.md) | 免责声明 |
+
 
 
 ## Feature
 
-- 从本地数据库文件中获取聊天数据
-- 支持 Windows / macOS 系统，兼容微信 3.x / 4.x 版本
+**公众号管理（本 fork 核心）**
+
+- **多公众号集中管理**：按 `gh_id` 归档关注的公众号文章，统一浏览、搜索、同步
+- **标签体系**：公众号打标签、批量隐藏 / 关注 / 打标，支持标签的增删改
+- **文章收藏**：单篇 ☆/★ 收藏，动态流支持「只看收藏」过滤
+- **LLM 汇总**：按天生成结构化报告（摘要 / 主题 / 必读评分 / 按公众号小段 / 亮点），支持附加自定义指令
+- **正文抓取与缓存**：抓取 mp.weixin.qq.com 正文写入本地库，30 天内复用
+- **关注动态**：默认 7 天文章流 + LLM 实时生成的 headline / themes / keywords（4 小时缓存）
+- **Web 管理界面**：四个页面（浏览 / 动态 / 汇总 / 管理），走 HTTP API，无需额外部署
+
+**底座能力（来自上游）**
+
+- 从本地数据库文件中获取聊天数据，支持 Windows / macOS
 - 支持获取数据与图片密钥 (Windows < 4.0.3.36 / macOS < 4.0.3.80)
 - 支持图片、语音等多媒体数据解密，支持 wxgf 格式解析
-- 支持自动解密数据库，并提供新消息 Webhook 回调
-- 提供 Terminal UI 界面，同时支持命令行工具和 Docker 镜像部署
-- 提供 HTTP API 服务，可轻松查询聊天记录、联系人、群聊、最近会话等信息
-- 支持 MCP Streamable HTTP 协议，可与 AI 助手无缝集成
-- 支持多账号管理，可在不同账号间切换
-- **公众号汇总（bizhub）**：本地解密 + 抓取公众号文章正文、生成结构化 AI 摘要、收藏与关注管理
-- **聊天记录统计**：`chatstat` 命令一键查看近期活跃 talker 与关键词
+- 自动解密数据库 + 新消息 Webhook 回调
+- Terminal UI 界面，同时支持命令行工具与 Docker 镜像部署
+- HTTP API 服务：聊天记录、联系人、群聊、最近会话，附内置 API 控制台
+- 支持 MCP Streamable HTTP 协议，可与 AI 助手集成
+- 微信多账号切换
+- **聊天记录统计**：`chatstat` 命令查看近期活跃 talker 与关键词
 
 ## Quick Start
 
